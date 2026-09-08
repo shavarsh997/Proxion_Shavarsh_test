@@ -1,5 +1,5 @@
 import { Role, SubmissionStatus, TaskStatus } from '@prisma/client';
-import { SubmissionsService } from '../src/submissions/submissions.service';
+import { SubmissionsService } from '../src/modules/submissions/submissions.service';
 
 describe('immutable submission versions', () => {
   it('retains v1 unchanged when a rework cycle creates v2', async () => {

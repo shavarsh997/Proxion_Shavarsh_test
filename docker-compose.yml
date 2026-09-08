@@ -16,7 +16,7 @@ services:
     ports: ["3000:3000"]
     environment:
       DATABASE_URL: postgresql://proxion:proxion@db:5432/proxion?schema=public
-      JWT_SECRET: development-only-change-me
+      JWT_SECRET: development-only-change-me-please
       PORT: 3000
       SEED_ON_START: "true"
     depends_on:

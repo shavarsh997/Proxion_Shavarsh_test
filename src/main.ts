@@ -3,8 +3,8 @@ import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { ApiExceptionFilter } from './common/http/filters/api-exception.filter';
-import { requestIdMiddleware } from './common/http/middleware/request-id.middleware';
+import { ApiExceptionFilter } from './common/filters/api-exception.filter';
+import { requestIdMiddleware } from './common/middleware/request-id.middleware';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);

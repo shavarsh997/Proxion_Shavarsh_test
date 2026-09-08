@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ReviewStatus, Role, SubmissionStatus, TaskStatus } from '@prisma/client';
-import { ReviewAccessPolicy } from '../src/reviews/review-access.policy';
-import { ReviewsService } from '../src/reviews/reviews.service';
+import { ReviewAccessPolicy } from '../src/modules/reviews/review-access.policy';
+import { ReviewsService } from '../src/modules/reviews/reviews.service';
 
 const reviewer = { id: 'reviewer', email: 'reviewer@test.local', role: Role.REVIEWER };
 const review = {
@@ -87,6 +87,41 @@ describe('review scoring invariants', () => {
     await service.create({ ...reviewer, role: Role.ADMIN }, 'submission', reviewer.id, 'rubric-v1');
     expect(tx.review.create).toHaveBeenCalledWith({
       data: { submissionId: 'submission', reviewerId: reviewer.id, rubricVersionId: 'rubric-v1' },
+    });
+  });
+
+  it('audits the actual previous score when a score is updated', async () => {
+    const previousScore = {
+      id: 'score-1',
+      score: 3,
+      comment: 'Needs clarification',
+    };
+    const tx: any = {
+      review: { findUnique: jest.fn().mockResolvedValue(review) },
+      rubricCriterion: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ rubricVersionId: 'rubric-v1', minScore: 0, maxScore: 5 }),
+      },
+      reviewScore: {
+        findUnique: jest.fn().mockResolvedValue(previousScore),
+        update: jest.fn().mockResolvedValue({
+          id: previousScore.id,
+          score: 4,
+          comment: 'Improved reasoning',
+        }),
+      },
+      auditLog: { create: jest.fn() },
+    };
+
+    await scoreService(tx).score(reviewer, 'review', 'criterion', 4, 'Improved reasoning');
+
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'UPDATED',
+        before: { score: 3, comment: 'Needs clarification' },
+        after: { score: 4, comment: 'Improved reasoning' },
+      }),
     });
   });
 });

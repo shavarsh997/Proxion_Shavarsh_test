@@ -1,6 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { Role, TaskStatus } from '@prisma/client';
-import { TaskWorkflowService } from '../src/tasks/task-workflow.service';
+import { TaskWorkflowService } from '../src/modules/tasks/task-workflow.service';
 
 const workflow = () => new TaskWorkflowService({ assertCanTransition: jest.fn() } as any);
 

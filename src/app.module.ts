@@ -1,16 +1,16 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { environmentValidationSchema } from './config/environment.validation';
-import { PrismaModule } from './prisma/prisma.module';
-import { AuthModule } from './auth/auth.module';
-import { ProjectsModule } from './projects/projects.module';
-import { TasksModule } from './tasks/tasks.module';
-import { SubmissionsModule } from './submissions/submissions.module';
-import { RubricsModule } from './rubrics/rubrics.module';
-import { ReviewsModule } from './reviews/reviews.module';
-import { AuditModule } from './audit/audit.module';
-import { UsersModule } from './users/users.module';
-import { HealthModule } from './health/health.module';
+import { environmentValidationSchema } from './config';
+import { PrismaModule } from './database/prisma.module';
+import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
+import { AuthModule } from './modules/auth/auth.module';
+import { HealthModule } from './modules/health/health.module';
+import { ProjectsModule } from './modules/projects/projects.module';
+import { ReviewsModule } from './modules/reviews/reviews.module';
+import { RubricsModule } from './modules/rubrics/rubrics.module';
+import { SubmissionsModule } from './modules/submissions/submissions.module';
+import { TasksModule } from './modules/tasks/tasks.module';
+import { UsersModule } from './modules/users/users.module';
 
 @Module({
   imports: [
@@ -26,7 +26,7 @@ import { HealthModule } from './health/health.module';
     SubmissionsModule,
     RubricsModule,
     ReviewsModule,
-    AuditModule,
+    AuditLogsModule,
     HealthModule,
   ],
 })
