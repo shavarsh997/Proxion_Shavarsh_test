@@ -1,0 +1,12 @@
+{
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true
+  },
+  "prettier.prettierPath": "${workspaceFolder}/node_modules/prettier",
+  "prettier.requireConfig": true
+}
