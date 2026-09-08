@@ -2,32 +2,28 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsString, IsUUID, MinLength } from 'class-validator';
 import { Role, TaskStatus } from '@prisma/client';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { Roles } from '../common/decorators/roles.decorator';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { AuthenticatedUser } from '../common/authenticated-user';
+import { CurrentUser } from '../common/auth/decorators/current-user.decorator';
+import { RequestId } from '../common/auth/decorators/request-id.decorator';
+import { Roles } from '../common/auth/decorators/roles.decorator';
+import { JwtAuthGuard } from '../common/auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../common/auth/guards/roles.guard';
+import { PaginationDto } from '../common/http/dto/pagination.dto';
+import type { AuthenticatedUser } from '../common/types/authenticated-user';
 import { TasksService } from './tasks.service';
-
-class CreateTaskDto {
-  @IsString() @MinLength(1) title!: string;
-
-  @IsString() @MinLength(1) instructions!: string;
-}
-
-class AssignDto {
-  @IsUUID() expertId!: string;
-}
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { AssignTaskDto } from './dto/assign-task.dto';
+import { CreateTaskDto } from './dto/create-task.dto';
 
 @Controller()
+@ApiTags('tasks')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class TasksController {
   constructor(private readonly tasks: TasksService) {}
@@ -39,8 +35,8 @@ export class TasksController {
     return this.tasks.create(projectId, dto);
   }
 
-  @Get('tasks') list(@CurrentUser() actor: AuthenticatedUser) {
-    return this.tasks.list(actor);
+  @Get('tasks') list(@CurrentUser() actor: AuthenticatedUser, @Query() query: PaginationDto) {
+    return this.tasks.list(actor, query.page, query.limit);
   }
 
   @Get('tasks/:id') get(
@@ -53,7 +49,7 @@ export class TasksController {
   @Post('tasks/:id/assign') @Roles(Role.ADMIN) assign(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: AssignDto,
+    @Body() dto: AssignTaskDto,
   ) {
     return this.tasks.assign(actor, id, dto.expertId);
   }
@@ -61,7 +57,7 @@ export class TasksController {
   @Post('tasks/:id/start') @Roles(Role.EXPERT) start(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
-    @Headers('x-request-id') requestId?: string,
+    @RequestId() requestId: string,
   ) {
     return this.tasks.transition(actor, id, TaskStatus.IN_PROGRESS, requestId);
   }
@@ -69,7 +65,7 @@ export class TasksController {
   @Post('tasks/:id/submit') @Roles(Role.EXPERT) submit(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
-    @Headers('x-request-id') requestId?: string,
+    @RequestId() requestId: string,
   ) {
     return this.tasks.transition(actor, id, TaskStatus.SUBMITTED, requestId);
   }
@@ -77,7 +73,7 @@ export class TasksController {
   @Post('tasks/:id/request-rework') @Roles(Role.REVIEWER) rework(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
-    @Headers('x-request-id') requestId?: string,
+    @RequestId() requestId: string,
   ) {
     return this.tasks.transition(actor, id, TaskStatus.REWORK, requestId);
   }
@@ -85,7 +81,7 @@ export class TasksController {
   @Post('tasks/:id/approve') @Roles(Role.REVIEWER) approve(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
-    @Headers('x-request-id') requestId?: string,
+    @RequestId() requestId: string,
   ) {
     return this.tasks.transition(actor, id, TaskStatus.APPROVED, requestId);
   }

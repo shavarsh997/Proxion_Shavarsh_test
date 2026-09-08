@@ -1,17 +1,17 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { PrismaService } from '../prisma/prisma.service';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class AuthService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly users: UsersService,
     private readonly jwt: JwtService,
   ) {}
 
   async login(email: string, password: string) {
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    const user = await this.users.findByEmail(email);
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
       throw new UnauthorizedException({
         code: 'INVALID_CREDENTIALS',

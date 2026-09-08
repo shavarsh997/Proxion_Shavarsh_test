@@ -8,55 +8,18 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { Type } from 'class-transformer';
-import {
-  ArrayMinSize,
-  IsArray,
-  IsNumber,
-  IsOptional,
-  IsString,
-  Min,
-  ValidateNested,
-} from 'class-validator';
 import { Role } from '@prisma/client';
-import { Roles } from '../common/decorators/roles.decorator';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/auth/decorators/roles.decorator';
+import { JwtAuthGuard } from '../common/auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../common/auth/guards/roles.guard';
 import { RubricsService } from './rubrics.service';
-
-class CriterionDto {
-  @IsString() name!: string;
-
-  @IsOptional() @IsString() description?: string;
-
-  @IsNumber() minScore!: number;
-
-  @IsNumber() maxScore!: number;
-
-  @IsNumber() @Min(0) weight!: number;
-
-  @IsNumber() @Min(0) position!: number;
-}
-
-class CreateRubricDto {
-  @IsString() name!: string;
-
-  @IsArray()
-  @ArrayMinSize(1)
-  @ValidateNested({ each: true })
-  @Type(() => CriterionDto)
-  criteria!: CriterionDto[];
-}
-
-class VersionRubricDto {
-  @IsArray()
-  @ArrayMinSize(1)
-  @ValidateNested({ each: true })
-  @Type(() => CriterionDto)
-  criteria!: CriterionDto[];
-}
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CreateRubricDto } from './dto/create-rubric.dto';
+import { CreateRubricVersionDto } from './dto/create-rubric-version.dto';
 
 @Controller()
+@ApiTags('rubrics')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(Role.ADMIN)
 export class RubricsController {
@@ -71,7 +34,7 @@ export class RubricsController {
 
   @Post('rubrics/:rubricId/versions') version(
     @Param('rubricId', ParseUUIDPipe) rubricId: string,
-    @Body() dto: VersionRubricDto,
+    @Body() dto: CreateRubricVersionDto,
   ) {
     return this.rubrics.version(rubricId, dto.criteria);
   }

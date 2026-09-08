@@ -1,18 +1,16 @@
 import { Body, Controller, Post } from '@nestjs/common';
-import { IsEmail, IsString, MinLength } from 'class-validator';
 import { AuthService } from './auth.service';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { LoginDto } from './dto/login.dto';
 
-class LoginDto {
-  @IsEmail() email!: string;
-
-  @IsString() @MinLength(8) password!: string;
-}
-
+@ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
-  @Post('login') login(@Body() body: LoginDto) {
+  @Post('login') @ApiOperation({ summary: 'Issue a JWT access token' }) login(
+    @Body() body: LoginDto,
+  ) {
     return this.auth.login(body.email, body.password);
   }
 }

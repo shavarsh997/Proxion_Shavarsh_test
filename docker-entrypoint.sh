@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
 npx prisma migrate deploy
-npx prisma db seed
-exec node dist/main
+if [ "${SEED_ON_START:-false}" = "true" ]; then
+  npx prisma db seed
+fi
+exec node dist/src/main

@@ -2,35 +2,29 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   Param,
   ParseUUIDPipe,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
-import { IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
 import { Role } from '@prisma/client';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { Roles } from '../common/decorators/roles.decorator';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { AuthenticatedUser } from '../common/authenticated-user';
+import { CurrentUser } from '../common/auth/decorators/current-user.decorator';
+import { RequestId } from '../common/auth/decorators/request-id.decorator';
+import { Roles } from '../common/auth/decorators/roles.decorator';
+import { JwtAuthGuard } from '../common/auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../common/auth/guards/roles.guard';
+import { PaginationDto } from '../common/http/dto/pagination.dto';
+import type { AuthenticatedUser } from '../common/types/authenticated-user';
 import { ReviewsService } from './reviews.service';
-
-class CreateReviewDto {
-  @IsUUID() reviewerId!: string;
-
-  @IsUUID() rubricVersionId!: string;
-}
-
-class ScoreDto {
-  @IsNumber() score!: number;
-
-  @IsOptional() @IsString() comment?: string;
-}
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CreateReviewDto } from './dto/create-review.dto';
+import { UpsertReviewScoreDto } from './dto/upsert-review-score.dto';
 
 @Controller()
+@ApiTags('reviews')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ReviewsController {
   constructor(private readonly reviews: ReviewsService) {}
@@ -39,13 +33,13 @@ export class ReviewsController {
     @CurrentUser() actor: AuthenticatedUser,
     @Param('submissionId', ParseUUIDPipe) id: string,
     @Body() dto: CreateReviewDto,
-    @Headers('x-request-id') requestId?: string,
+    @RequestId() requestId: string,
   ) {
     return this.reviews.create(actor, id, dto.reviewerId, dto.rubricVersionId, requestId);
   }
 
-  @Get('reviews') list(@CurrentUser() actor: AuthenticatedUser) {
-    return this.reviews.list(actor);
+  @Get('reviews') list(@CurrentUser() actor: AuthenticatedUser, @Query() query: PaginationDto) {
+    return this.reviews.list(actor, query.page, query.limit);
   }
 
   @Get('reviews/:id') get(
@@ -59,8 +53,8 @@ export class ReviewsController {
     @CurrentUser() actor: AuthenticatedUser,
     @Param('reviewId', ParseUUIDPipe) reviewId: string,
     @Param('criterionId', ParseUUIDPipe) criterionId: string,
-    @Body() dto: ScoreDto,
-    @Headers('x-request-id') requestId?: string,
+    @Body() dto: UpsertReviewScoreDto,
+    @RequestId() requestId: string,
   ) {
     return this.reviews.score(actor, reviewId, criterionId, dto.score, dto.comment, requestId);
   }

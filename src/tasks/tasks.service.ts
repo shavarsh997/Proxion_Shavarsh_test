@@ -1,7 +1,10 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, Role, TaskStatus } from '@prisma/client';
-import type { AuthenticatedUser } from '../common/authenticated-user';
+import { Prisma, ReviewStatus, Role, SubmissionStatus, TaskStatus } from '@prisma/client';
+import { paginationMeta } from '../common/http/dto/pagination.dto';
+import type { AuthenticatedUser } from '../common/types/authenticated-user';
 import { PrismaService } from '../prisma/prisma.service';
+import { UsersService } from '../users/users.service';
+import { TaskAccessPolicy } from './task-access.policy';
 import { TaskWorkflowService } from './task-workflow.service';
 
 const taskDetails = {
@@ -15,6 +18,8 @@ export class TasksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly workflow: TaskWorkflowService,
+    private readonly users: UsersService,
+    private readonly access: TaskAccessPolicy,
   ) {}
 
   async create(projectId: string, input: { title: string; instructions: string }) {
@@ -22,17 +27,24 @@ export class TasksService {
     return this.prisma.task.create({ data: { projectId, ...input } });
   }
 
-  list(actor: AuthenticatedUser) {
-    return this.prisma.task.findMany({
-      where: this.taskVisibilityFor(actor),
-      include: taskDetails,
-      orderBy: { updatedAt: 'desc' },
-    });
+  async list(actor: AuthenticatedUser, page: number, limit: number) {
+    const where = this.taskVisibilityFor(actor);
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.task.findMany({
+        where,
+        include: taskDetails,
+        orderBy: { updatedAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.task.count({ where }),
+    ]);
+    return { data, meta: paginationMeta(page, limit, total) };
   }
 
   async assign(actor: AuthenticatedUser, taskId: string, expertId: string) {
     const task = await this.getTaskOrThrow(taskId);
-    const expert = await this.prisma.user.findUnique({ where: { id: expertId } });
+    const expert = await this.users.findByIdWithRole(expertId, Role.EXPERT);
 
     if (!expert || expert.role !== Role.EXPERT) {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Expert not found' });
@@ -49,8 +61,9 @@ export class TasksService {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Task not found' });
     }
 
-    this.assertTaskReadAccess(
+    await this.access.assertCanRead(
       actor,
+      taskId,
       task.assignments.map((assignment) => assignment.expertId),
     );
     const reviews = await this.findVisibleReviews(actor, taskId);
@@ -68,16 +81,24 @@ export class TasksService {
     targetStatus: TaskStatus,
     requestId?: string,
   ) {
-    return this.prisma.$transaction(
-      async (transaction) => {
-        if (targetStatus === TaskStatus.SUBMITTED) {
-          await this.finalizeLatestSubmission(transaction, actor, taskId);
-        }
-
-        return this.workflow.transition(transaction, actor, taskId, targetStatus, requestId);
-      },
-      { isolationLevel: 'Serializable' },
-    );
+    // Workflow state, submission finalization, reviewer decision, and task audit are atomic.
+    return this.prisma.$transaction(async (transaction) => {
+      if (targetStatus === TaskStatus.SUBMITTED) {
+        await this.lockTaskForSubmissionLifecycle(transaction, taskId);
+        await this.finalizeLatestSubmission(transaction, actor, taskId);
+      }
+      const task = await this.workflow.transition(
+        transaction,
+        actor,
+        taskId,
+        targetStatus,
+        requestId,
+      );
+      if (targetStatus === TaskStatus.REWORK || targetStatus === TaskStatus.APPROVED) {
+        await this.completeReviewerDecision(transaction, actor.id, taskId, targetStatus);
+      }
+      return task;
+    });
   }
 
   private taskVisibilityFor(actor: AuthenticatedUser): Prisma.TaskWhereInput {
@@ -86,12 +107,6 @@ export class TasksService {
       return { assignments: { some: { expertId: actor.id } } };
     }
     return { submissions: { some: { reviews: { some: { reviewerId: actor.id } } } } };
-  }
-
-  private assertTaskReadAccess(actor: AuthenticatedUser, assignedExpertIds: string[]) {
-    if (actor.role !== Role.EXPERT || assignedExpertIds.includes(actor.id)) return;
-
-    throw new ForbiddenException({ code: 'FORBIDDEN', message: 'Task is not assigned to you' });
   }
 
   private findVisibleReviews(actor: AuthenticatedUser, taskId: string) {
@@ -126,7 +141,7 @@ export class TasksService {
         message: 'Create a submission before submitting the task',
       });
     }
-    if (latestSubmission.submittedAt) {
+    if (latestSubmission.status === SubmissionStatus.SUBMITTED) {
       throw new ForbiddenException({
         code: 'SUBMISSION_ALREADY_FINALIZED',
         message: 'Latest submission is already finalized',
@@ -135,7 +150,35 @@ export class TasksService {
 
     await transaction.submission.update({
       where: { id: latestSubmission.id },
-      data: { submittedAt: new Date() },
+      data: { status: SubmissionStatus.SUBMITTED, submittedAt: new Date() },
+    });
+  }
+
+  private lockTaskForSubmissionLifecycle(transaction: Prisma.TransactionClient, taskId: string) {
+    // Submission creation locks the same parent row, preventing a draft version from racing a submit.
+    return transaction.$executeRaw`SELECT 1 FROM "Task" WHERE id = ${taskId}::uuid FOR UPDATE`;
+  }
+
+  private async completeReviewerDecision(
+    transaction: Prisma.TransactionClient,
+    reviewerId: string,
+    taskId: string,
+    targetStatus: TaskStatus,
+  ) {
+    const review = await transaction.review.findFirst({
+      where: { reviewerId, status: ReviewStatus.OPEN, submission: { taskId } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!review) return;
+    await transaction.review.update({
+      where: { id: review.id },
+      data: {
+        status:
+          targetStatus === TaskStatus.APPROVED
+            ? ReviewStatus.APPROVED
+            : ReviewStatus.REWORK_REQUESTED,
+        completedAt: new Date(),
+      },
     });
   }
 

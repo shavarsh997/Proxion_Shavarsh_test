@@ -1,18 +1,27 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
-import { IsString, MinLength } from 'class-validator';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { Role } from '@prisma/client';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { Roles } from '../common/decorators/roles.decorator';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../common/guards/roles.guard';
-import { AuthenticatedUser } from '../common/authenticated-user';
+import { CurrentUser } from '../common/auth/decorators/current-user.decorator';
+import { Roles } from '../common/auth/decorators/roles.decorator';
+import { JwtAuthGuard } from '../common/auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../common/auth/guards/roles.guard';
+import type { AuthenticatedUser } from '../common/types/authenticated-user';
 import { SubmissionsService } from './submissions.service';
-
-class CreateSubmissionDto {
-  @IsString() @MinLength(1) content!: string;
-}
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CreateSubmissionDto } from './dto/create-submission.dto';
+import { UpdateSubmissionDto } from './dto/update-submission.dto';
 
 @Controller()
+@ApiTags('submissions')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class SubmissionsController {
   constructor(private readonly submissions: SubmissionsService) {}
@@ -23,6 +32,14 @@ export class SubmissionsController {
     @Body() dto: CreateSubmissionDto,
   ) {
     return this.submissions.create(actor, taskId, dto.content);
+  }
+
+  @Patch('submissions/:id') @Roles(Role.EXPERT) updateDraft(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateSubmissionDto,
+  ) {
+    return this.submissions.updateDraft(actor, id, dto.content);
   }
 
   @Get('tasks/:taskId/submissions') list(

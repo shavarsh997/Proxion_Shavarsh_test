@@ -29,6 +29,11 @@ enum ReviewStatus {
   APPROVED
 }
 
+enum SubmissionStatus {
+  DRAFT
+  SUBMITTED
+}
+
 model User {
   id                  String       @id @default(uuid()) @db.Uuid
   email               String       @unique
@@ -82,22 +87,26 @@ model Assignment {
   assignedBy   User     @relation("AssignmentMaker", fields: [assignedById], references: [id])
 
   @@index([expertId, taskId])
+  @@index([taskId])
 }
 
 model Submission {
-  id          String    @id @default(uuid()) @db.Uuid
-  taskId      String    @db.Uuid
-  expertId    String    @db.Uuid
+  id          String           @id @default(uuid()) @db.Uuid
+  taskId      String           @db.Uuid
+  expertId    String           @db.Uuid
   version     Int
+  status      SubmissionStatus @default(DRAFT)
   content     String
-  createdAt   DateTime  @default(now())
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
   submittedAt DateTime?
-  task        Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  expert      User      @relation(fields: [expertId], references: [id])
+  task        Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  expert      User             @relation(fields: [expertId], references: [id])
   reviews     Review[]
 
   @@unique([taskId, version])
   @@index([taskId, createdAt])
+  @@index([taskId, status])
 }
 
 model Rubric {
@@ -181,4 +190,5 @@ model AuditLog {
 
   @@index([entityType, entityId])
   @@index([actorId, createdAt])
+  @@index([createdAt])
 }

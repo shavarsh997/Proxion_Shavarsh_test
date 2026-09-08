@@ -1,14 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { paginationMeta } from '../common/http/dto/pagination.dto';
 
 @Injectable()
 export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
 
-  list(limit = 50) {
-    return this.prisma.auditLog.findMany({
-      take: Math.min(limit, 100),
-      orderBy: { createdAt: 'desc' },
-    });
+  async list(page: number, limit: number) {
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.auditLog.findMany({
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.auditLog.count(),
+    ]);
+    return { data, meta: paginationMeta(page, limit, total) };
   }
 }

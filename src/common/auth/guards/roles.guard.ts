@@ -3,7 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { Role } from '@prisma/client';
 import type { Request } from 'express';
-import type { AuthenticatedUser } from '../authenticated-user';
+import type { AuthenticatedUser } from '../../types/authenticated-user';
 
 type AuthenticatedRequest = Request & { user?: AuthenticatedUser };
 

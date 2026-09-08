@@ -1,100 +1,145 @@
-# Proxion workflow API
+# Proxion Workflow API
 
-A deliberately focused NestJS/PostgreSQL backend work sample for the reliable core of an expert-review workflow. It implements projects, task assignment and lifecycle, immutable submission versions, versioned rubrics, criterion-level reviews, JWT authentication, RBAC, and an append-only audit trail. There is intentionally no frontend.
+Proxion is a focused NestJS/PostgreSQL API for an expert-review workflow. It manages projects, expert assignments, versioned submissions, immutable rubric versions, criterion-level reviews, JWT authentication, and an append-only audit trail.
 
-> An optional, fully isolated `dev-client/` exists only for local manual API testing. It can be deleted without changing the backend build, test, deployment, or architecture.
+The backend is a modular monolith: one deployable NestJS application and one PostgreSQL database. Modules draw clear domain boundaries without introducing distributed-system infrastructure.
 
-## Running it
+`dev-client/` is an optional, isolated API exerciser. The root build, tests, linting, type checking, Docker image, and runtime do not depend on it; it can be deleted without affecting the backend.
 
-The full environment starts with migrations and idempotent seed data:
+## Run locally
+
+Docker Compose starts PostgreSQL, applies migrations, loads deterministic demo data, and starts the API:
 
 ```bash
 docker compose up --build
 ```
 
-The API listens on `http://localhost:3000`. For local development, copy `.env.example` to `.env`, point `DATABASE_URL` at PostgreSQL, then run:
+The API is available at `http://localhost:3000`, Swagger at `http://localhost:3000/api/docs`, and the database health check at `GET /health`.
+
+For local development, set `DATABASE_URL` and `JWT_SECRET` in `.env`, then run:
 
 ```bash
 npm install
 npx prisma migrate deploy
-npx prisma db seed
+npx prisma db seed # optional demo data
 npm run start:dev
 ```
 
-Seed credentials (all use `Password123!`) are `admin@proxion.local`, `expert@proxion.local`, and `reviewer@proxion.local`. The seed output includes stable project/task IDs; the seeded task is assigned to the expert and begins in `ASSIGNED`.
-
-Run focused invariant tests with:
+Compose sets `SEED_ON_START=true` because it is the work-sample environment. The image defaults it to `false`: migrations run at startup, but production restarts do not automatically seed data. Demo accounts use `Password123!`: `admin@proxion.local`, `expert@proxion.local`, and `reviewer@proxion.local`.
 
 ```bash
-npm test
+npm run check
 ```
 
-## Code quality
+Runs type checking, ESLint, Prettier verification, and unit tests. The complete live-API workflow test requires a running seeded API:
 
-Run every backend quality gate with `npm run check`.
+```bash
+npm run test:e2e
+```
 
-Individual commands are `npm run typecheck`, `npm run lint`, `npm run lint:fix`,
-`npm run format`, `npm run format:check`, and `npm test`. These commands cover only the
-backend (`src`, `test`, and `prisma`); the optional `dev-client/` is not required.
+Set `E2E_BASE_URL` when the API is not on `http://127.0.0.1:3000`.
 
-## Architecture and model
-
-This is a modular monolith. Nest modules keep authentication, projects, tasks/workflow, submissions, rubrics, reviews, audit access, and Prisma infrastructure separate while keeping the workflow transaction local to one PostgreSQL database. That is the smallest architecture which preserves the core invariants without operationally expensive distributed components.
-
-Every primary key is a UUID. A `Project` owns `Task` and `Rubric`; `Assignment` records task-to-expert history rather than placing an expert ID on the task. A `Submission` belongs to a task/expert and has a unique `(taskId, version)`. A `Review` pins both a submission and one precise `RubricVersion`; `ReviewScore` pins every individual criterion score. `AuditLog` has JSONB before/after values and indexes for entity history and actor timelines.
-
-## Workflow
-
-`TaskWorkflowService` is the only location that mutates `Task.status`.
+## Request architecture
 
 ```text
-ASSIGNED → IN_PROGRESS → SUBMITTED → IN_REVIEW → APPROVED
-                                      └──────→ REWORK → IN_PROGRESS
+HTTP request
+  → request-id middleware
+  → JWT authentication guard
+  → role authorization guard
+  → controller (route, DTO, Swagger metadata)
+  → service / access policy / TaskWorkflowService
+  → Prisma transaction where the operation is atomic
+  → PostgreSQL + AuditLog
+  → normalized HTTP response with requestId
 ```
 
-The expert starts and submits assigned work. An admin assigns a reviewer by creating a review, which advances `SUBMITTED → IN_REVIEW`. That assigned reviewer can request rework or approve. `APPROVED` is terminal. Each transition checks resource authorization, validates the transition, conditionally updates the task, and writes the audit record in the same serializable database transaction. An invalid move returns `409 INVALID_STATE_TRANSITION`.
+- **Authentication:** `JwtAuthGuard` verifies the Bearer token issued by `AuthService` after bcrypt password verification.
+- **Role authorization:** `RolesGuard` applies `ADMIN`, `EXPERT`, and `REVIEWER` restrictions declared by `@Roles`.
+- **Resource authorization:** `TaskAccessPolicy` and `ReviewAccessPolicy` check task assignment and review ownership inside services. Client state never authorizes a resource.
+- **Business invariants:** services validate state, ownership, versioning, rubric compatibility, and score ranges. `TaskWorkflowService` is the only authority that changes `Task.status`.
+- **Persistence and auditability:** `PrismaService` is the single database client. Critical changes create their audit entry in the same database transaction.
 
-## Versioning, auditability, and concurrency
+Every request accepts an optional `X-Request-ID`; otherwise the API creates one. The ID is returned in the response header and in normalized errors:
 
-Submission content is creation-only: there are no update/delete application endpoints. An expert creates a fresh version while a task is `IN_PROGRESS`; submission finalization only sets `submittedAt` for the newest version. Rework returns the task to `IN_PROGRESS`, letting the expert create v2 while v1 remains queryable and unchanged. The `(taskId, version)` unique constraint is the final database backstop. Version allocation takes a PostgreSQL transaction advisory lock keyed by task, so concurrent version requests for the same task serialize while unrelated tasks proceed independently. For a higher-assurance production boundary, I would also revoke direct table mutation from the application role and add a trigger that blocks changes to submission content/version/task/expert fields (and a retention policy for deletes).
+```json
+{
+  "statusCode": 409,
+  "code": "INVALID_STATE_TRANSITION",
+  "message": "Transition ASSIGNED -> APPROVED is not allowed",
+  "requestId": "a4c28baf-1b96-4c57-b315-1b8e5fbbf097"
+}
+```
 
-Rubric versions are immutable records. New criteria are created only with a new `RubricVersion`; reviews hold `rubricVersionId`, never “latest rubric,” so later edits cannot change historical scoring context. Score updates prove the criterion is from exactly that pinned version and respect its min/max. Each score mutation and its audit record are one serializable transaction.
+## Modules
 
-Task concurrency uses an optimistic `version` column: the transition reads the version then uses `updateMany` with `id + version`. A loser gets `409 CONCURRENT_MODIFICATION`; PostgreSQL serializable retries/errors are mapped to the same safe API response. Audit failures roll back the state/score mutation because they share the transaction.
+```text
+Users ──→ Auth
+  │
+  ├──→ Tasks ←── Submissions
+  │       ↑
+  │       └────── Reviews
+  │
+Projects ──→ Tasks
+    │
+    └──────→ Rubrics ──→ Reviews
 
-`AuditLog` is append-only by API design: only internal transactional services create entries, and no update/delete controller exists. At production scale I would give the application role INSERT/SELECT-only rights for this table or place it in a restricted schema.
+Prisma (global module) ←── all domain services
+AuditLog ←── workflow transitions and review-score mutations
+```
 
-## Security and API behavior
+Each domain module uses the same local structure: `*.module.ts`, `*.controller.ts`, `*.service.ts`, a `*.policy.ts` only when it has resource access rules, and `dto/` for request DTOs. Shared infrastructure is intentionally limited to `common/auth`, `common/http`, `common/exceptions`, and `common/types`.
 
-Authentication is intentionally simple JWT login. Guards provide coarse role checks; services independently enforce assignment/reviewer ownership before reading or mutating task, submission, review, or score resources. This prevents a future controller with an incorrect decorator from becoming an authorization bypass. DTO validation whitelists accepted payload fields. Expected errors are stable `400 VALIDATION_ERROR`, `401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 NOT_FOUND`, and `409` conflict codes; raw Prisma errors are not returned for known races.
+## Workflow and atomicity
 
-Key endpoints:
+```text
+ASSIGNED → IN_PROGRESS → SUBMITTED → IN_REVIEW → APPROVED (terminal)
+                                  └─→ REWORK → IN_PROGRESS
+```
+
+There is no `REWORK → APPROVED` transition. An expert must create and submit a new version, and an admin must create a new review before a reviewer can approve it.
+
+`TaskWorkflowService` defines the complete transition map in one place. It updates `Task` with an optimistic `id + version` predicate, then creates `AuditLog.STATUS_CHANGED` in the same transaction. A stale concurrent request returns `409 CONCURRENT_MODIFICATION`; an audit failure rolls the state change back.
+
+Critical transaction boundaries are intentionally visible in the domain services:
+
+- task transition + task audit entry;
+- submission finalization + task transition;
+- reviewer rework/approval + review completion + task transition;
+- review-score upsert + audit entry;
+- submission and rubric version allocation under a parent-row lock.
+
+## Versioning and historical data
+
+```text
+Project
+ ├── Task ──→ Submission v1 (SUBMITTED, immutable)
+ │             Submission v2 (DRAFT → SUBMITTED, immutable)
+ └── Rubric ─→ RubricVersion 1 ─→ criteria
+               RubricVersion 2 ─→ criteria
+
+Review ──→ one Submission version + one exact RubricVersion
+```
+
+`UNIQUE(taskId, version)` is the database invariant for submissions. Version allocation, draft updates, and finalization lock the same `Task` row, so a draft cannot be updated concurrently with finalization. `PATCH /submissions/:id` accepts changes only from the draft author while its task is `IN_PROGRESS`. A `SUBMITTED` version raises `SUBMISSION_IMMUTABLE`; no submission delete endpoint exists. After rework, the expert creates v2 instead of overwriting v1.
+
+Rubrics are versioned through `UNIQUE(rubricId, version)`. A review permanently stores `rubricVersionId`, while scores permanently store their criterion ID, so a later rubric version cannot silently alter historical scoring context. There is no API to update or delete historical rubric versions or criteria.
+
+`AuditLog` has no public update or delete API and is append-only by application design. A production deployment can harden both submitted-submission immutability and audit append-only behavior further with database permissions or triggers.
+
+## API behavior
+
+List endpoints use `?page=1&limit=20` with a maximum limit of 100 and return `{ data, meta }`. Important routes include:
 
 - `POST /auth/login`
-- `POST /projects`, `GET /projects`, `GET /projects/:id`
-- `POST /projects/:projectId/tasks`, `GET /tasks/:id`, `POST /tasks/:id/assign`
-- `POST /tasks/:id/start`, `/submit`, `/request-rework`, `/approve`
-- `POST|GET /tasks/:taskId/submissions`, `GET /submissions/:id`
-- `POST /projects/:projectId/rubrics`, `POST /rubrics/:rubricId/versions`, `GET /rubrics/:rubricId/versions/:version`
-- `POST /submissions/:submissionId/reviews`, `GET /reviews/:id`, `PUT /reviews/:reviewId/scores/:criterionId`
+- `GET|POST /projects`, `POST /projects/:projectId/tasks`
+- `GET /tasks`, `POST /tasks/:id/start|submit|request-rework|approve`
+- `POST|GET /tasks/:taskId/submissions`, `PATCH /submissions/:id`, `GET /submissions/:id`
+- `POST /projects/:projectId/rubrics`, `POST /rubrics/:rubricId/versions`
+- `POST /submissions/:submissionId/reviews`, `GET|PUT /reviews`
 - `GET /audit-logs` (admin only)
 
-Example happy path (substitute IDs returned by the preceding request):
+Global DTO validation rejects unknown fields and validates UUIDs and pagination values. Expected errors use stable `400`, `401`, `403`, `404`, and `409` responses; Prisma internals are never exposed.
 
-```bash
-TOKEN=$(curl -s localhost:3000/auth/login -H 'content-type: application/json' \
-  -d '{"email":"expert@proxion.local","password":"Password123!"}' | jq -r .accessToken)
-curl -X POST localhost:3000/tasks/22222222-2222-4222-8222-222222222222/start -H "Authorization: Bearer $TOKEN"
-curl -X POST localhost:3000/tasks/22222222-2222-4222-8222-222222222222/submissions -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"content":"My evidence-backed answer"}'
-curl -X POST localhost:3000/tasks/22222222-2222-4222-8222-222222222222/submit -H "Authorization: Bearer $TOKEN"
-```
+## Scope
 
-An admin next creates the review with reviewer and rubric-version UUIDs; the reviewer logs in, reads that review, records scores, and requests rework or approves using the task endpoint.
-
-## Scope, limits, and next work
-
-Deliberately excluded: frontend/client portal, import/export, files, LLM integrations, billing, queues, Redis, Kafka, microservices, Kubernetes, OAuth/SSO, and a full observability or compliance program. Those would obscure the relational and workflow spine this sample is intended to demonstrate.
-
-The first pressure points at volume are an ever-growing audit table, large inline submission payloads, unpaginated project/review reads, connection-pool limits, and write contention on very hot tasks/rubrics. Large documents should move to object storage with a content reference; audit records need retention/partitioning; list endpoints need cursor pagination and purpose-built projections; long-running imports or file processing would finally justify a queue.
-
-The next production steps would be refresh-token/session revocation, UUID parameter pipes and OpenAPI, request-ID middleware/structured logs, pagination, DB-role enforcement for immutable/audit tables, observability, background file processing, and a fuller e2e suite against a disposable PostgreSQL instance.
+The sample intentionally excludes file storage, queues, Redis, microservices, Kubernetes, OAuth/SSO, and a full observability platform. Practical next steps for higher volume would be object storage for large submissions, cursor pagination, audit retention/partitioning, database-level immutability controls, refresh-token revocation, and structured request logs.

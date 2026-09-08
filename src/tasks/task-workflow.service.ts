@@ -1,13 +1,14 @@
-import {
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, Role, Task, TaskStatus } from '@prisma/client';
-import type { AuthenticatedUser } from '../common/authenticated-user';
+import type { AuthenticatedUser } from '../common/types/authenticated-user';
+import {
+  ConcurrentModificationException,
+  InvalidStateTransitionException,
+} from '../common/exceptions/domain.exceptions';
+import { TaskAccessPolicy } from './task-access.policy';
 
-const ALLOWED_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
+// This is the sole task-state transition map. Task.status is not mutated elsewhere.
+const ALLOWED_TASK_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
   ASSIGNED: [TaskStatus.IN_PROGRESS],
   IN_PROGRESS: [TaskStatus.SUBMITTED],
   SUBMITTED: [TaskStatus.IN_REVIEW],
@@ -18,6 +19,8 @@ const ALLOWED_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> =
 
 @Injectable()
 export class TaskWorkflowService {
+  constructor(private readonly access: TaskAccessPolicy) {}
+
   async transition(
     transaction: Prisma.TransactionClient,
     actor: AuthenticatedUser,
@@ -53,12 +56,9 @@ export class TaskWorkflowService {
   }
 
   private assertTransitionIsAllowed(currentStatus: TaskStatus, targetStatus: TaskStatus) {
-    if (ALLOWED_TRANSITIONS[currentStatus].includes(targetStatus)) return;
+    if (ALLOWED_TASK_TRANSITIONS[currentStatus].includes(targetStatus)) return;
 
-    throw new ConflictException({
-      code: 'INVALID_STATE_TRANSITION',
-      message: `Cannot transition ${currentStatus} to ${targetStatus}`,
-    });
+    throw new InvalidStateTransitionException(currentStatus, targetStatus);
   }
 
   private async assertActorCanTransition(
@@ -68,24 +68,16 @@ export class TaskWorkflowService {
     targetStatus: TaskStatus,
   ) {
     if (actor.role === Role.ADMIN) return;
-
-    if (actor.role === Role.EXPERT && this.isExpertTransition(targetStatus)) {
-      const assignment = await transaction.assignment.findFirst({
-        where: { taskId: task.id, expertId: actor.id },
-      });
-      if (assignment) return;
+    if (this.isExpertTransition(targetStatus)) {
+      await this.access.assertCanTransition(transaction, actor, task.id, 'expert');
+      return;
     }
-
-    if (actor.role === Role.REVIEWER && this.isReviewerTransition(targetStatus)) {
-      const review = await transaction.review.findFirst({
-        where: { reviewerId: actor.id, submission: { taskId: task.id } },
-      });
-      if (review) return;
+    if (this.isReviewerTransition(targetStatus)) {
+      await this.access.assertCanTransition(transaction, actor, task.id, 'reviewer');
+      return;
     }
-    throw new ForbiddenException({
-      code: 'FORBIDDEN',
-      message: 'You are not authorized for this task transition',
-    });
+    // Admin-triggered transitions still flow through the same state map above.
+    await this.access.assertCanTransition(transaction, actor, task.id, 'expert');
   }
 
   private isExpertTransition(targetStatus: TaskStatus) {
@@ -108,10 +100,7 @@ export class TaskWorkflowService {
     });
 
     if (updateResult.count !== 1) {
-      throw new ConflictException({
-        code: 'CONCURRENT_MODIFICATION',
-        message: 'Task was modified concurrently; retry',
-      });
+      throw new ConcurrentModificationException();
     }
 
     return transaction.task.findUniqueOrThrow({ where: { id: task.id } });

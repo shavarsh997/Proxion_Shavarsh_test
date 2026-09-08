@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import Joi from 'joi';
+import { environmentValidationSchema } from './config/environment.validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { ProjectsModule } from './projects/projects.module';
@@ -9,18 +9,17 @@ import { SubmissionsModule } from './submissions/submissions.module';
 import { RubricsModule } from './rubrics/rubrics.module';
 import { ReviewsModule } from './reviews/reviews.module';
 import { AuditModule } from './audit/audit.module';
+import { UsersModule } from './users/users.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      validationSchema: Joi.object({
-        DATABASE_URL: Joi.string().required(),
-        JWT_SECRET: Joi.string().min(16).required(),
-        PORT: Joi.number().default(3000),
-      }),
+      validationSchema: environmentValidationSchema,
     }),
     PrismaModule,
+    UsersModule,
     AuthModule,
     ProjectsModule,
     TasksModule,
@@ -28,6 +27,7 @@ import { AuditModule } from './audit/audit.module';
     RubricsModule,
     ReviewsModule,
     AuditModule,
+    HealthModule,
   ],
 })
 export class AppModule {}

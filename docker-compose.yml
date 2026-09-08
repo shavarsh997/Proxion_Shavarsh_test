@@ -18,6 +18,7 @@ services:
       DATABASE_URL: postgresql://proxion:proxion@db:5432/proxion?schema=public
       JWT_SECRET: development-only-change-me
       PORT: 3000
+      SEED_ON_START: "true"
     depends_on:
       db: { condition: service_healthy }
 volumes:

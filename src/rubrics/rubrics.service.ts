@@ -25,24 +25,21 @@ export class RubricsService {
     });
   }
   async version(rubricId: string, criteria: CriterionInput[]) {
-    return this.prisma.$transaction(
-      async (tx) => {
-        const rubric = await tx.rubric.findUnique({ where: { id: rubricId } });
-        if (!rubric)
-          throw new NotFoundException({ code: 'NOT_FOUND', message: 'Rubric not found' });
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${rubricId}))`;
-        const last = await tx.rubricVersion.findFirst({
-          where: { rubricId },
-          orderBy: { version: 'desc' },
-          select: { version: true },
-        });
-        return tx.rubricVersion.create({
-          data: { rubricId, version: (last?.version ?? 0) + 1, criteria: { create: criteria } },
-          include: { criteria: true },
-        });
-      },
-      { isolationLevel: 'Serializable' },
-    );
+    return this.prisma.$transaction(async (tx) => {
+      const rubric = await tx.rubric.findUnique({ where: { id: rubricId } });
+      if (!rubric) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Rubric not found' });
+      // A parent-row lock serializes version allocation without introducing a global lock.
+      await tx.$executeRaw`SELECT 1 FROM "Rubric" WHERE id = ${rubricId}::uuid FOR UPDATE`;
+      const last = await tx.rubricVersion.findFirst({
+        where: { rubricId },
+        orderBy: { version: 'desc' },
+        select: { version: true },
+      });
+      return tx.rubricVersion.create({
+        data: { rubricId, version: (last?.version ?? 0) + 1, criteria: { create: criteria } },
+        include: { criteria: true },
+      });
+    });
   }
   async getVersion(rubricId: string, version: number) {
     const value = await this.prisma.rubricVersion.findUnique({
