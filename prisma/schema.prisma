@@ -1,0 +1,184 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  EXPERT
+  REVIEWER
+}
+
+enum TaskStatus {
+  ASSIGNED
+  IN_PROGRESS
+  SUBMITTED
+  IN_REVIEW
+  REWORK
+  APPROVED
+}
+
+enum ReviewStatus {
+  OPEN
+  COMPLETED
+  REWORK_REQUESTED
+  APPROVED
+}
+
+model User {
+  id                  String       @id @default(uuid()) @db.Uuid
+  email               String       @unique
+  passwordHash        String
+  role                Role
+  createdAt           DateTime     @default(now())
+  projects            Project[]    @relation("ProjectCreator")
+  assignedAssignments Assignment[] @relation("AssignedExpert")
+  madeAssignments     Assignment[] @relation("AssignmentMaker")
+  submissions         Submission[]
+  reviews             Review[]
+  auditLogs           AuditLog[]   @relation("AuditActor")
+}
+
+model Project {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   User     @relation("ProjectCreator", fields: [createdById], references: [id])
+  tasks       Task[]
+  rubrics     Rubric[]
+}
+
+model Task {
+  id           String       @id @default(uuid()) @db.Uuid
+  projectId    String       @db.Uuid
+  title        String
+  instructions String
+  status       TaskStatus   @default(ASSIGNED)
+  version      Int          @default(0)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignments  Assignment[]
+  submissions  Submission[]
+
+  @@index([projectId, status])
+}
+
+model Assignment {
+  id           String   @id @default(uuid()) @db.Uuid
+  taskId       String   @db.Uuid
+  expertId     String   @db.Uuid
+  assignedById String   @db.Uuid
+  assignedAt   DateTime @default(now())
+  task         Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  expert       User     @relation("AssignedExpert", fields: [expertId], references: [id])
+  assignedBy   User     @relation("AssignmentMaker", fields: [assignedById], references: [id])
+
+  @@index([expertId, taskId])
+}
+
+model Submission {
+  id          String    @id @default(uuid()) @db.Uuid
+  taskId      String    @db.Uuid
+  expertId    String    @db.Uuid
+  version     Int
+  content     String
+  createdAt   DateTime  @default(now())
+  submittedAt DateTime?
+  task        Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  expert      User      @relation(fields: [expertId], references: [id])
+  reviews     Review[]
+
+  @@unique([taskId, version])
+  @@index([taskId, createdAt])
+}
+
+model Rubric {
+  id        String          @id @default(uuid()) @db.Uuid
+  projectId String          @db.Uuid
+  name      String
+  createdAt DateTime        @default(now())
+  project   Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versions  RubricVersion[]
+}
+
+model RubricVersion {
+  id        String            @id @default(uuid()) @db.Uuid
+  rubricId  String            @db.Uuid
+  version   Int
+  createdAt DateTime          @default(now())
+  rubric    Rubric            @relation(fields: [rubricId], references: [id], onDelete: Cascade)
+  criteria  RubricCriterion[]
+  reviews   Review[]
+
+  @@unique([rubricId, version])
+}
+
+model RubricCriterion {
+  id              String        @id @default(uuid()) @db.Uuid
+  rubricVersionId String        @db.Uuid
+  name            String
+  description     String?
+  minScore        Decimal       @db.Decimal(6, 2)
+  maxScore        Decimal       @db.Decimal(6, 2)
+  weight          Decimal       @db.Decimal(6, 2)
+  position        Int
+  rubricVersion   RubricVersion @relation(fields: [rubricVersionId], references: [id], onDelete: Cascade)
+  scores          ReviewScore[]
+
+  @@unique([rubricVersionId, position])
+}
+
+model Review {
+  id              String        @id @default(uuid()) @db.Uuid
+  submissionId    String        @db.Uuid
+  reviewerId      String        @db.Uuid
+  rubricVersionId String        @db.Uuid
+  status          ReviewStatus  @default(OPEN)
+  createdAt       DateTime      @default(now())
+  completedAt     DateTime?
+  submission      Submission    @relation(fields: [submissionId], references: [id])
+  reviewer        User          @relation(fields: [reviewerId], references: [id])
+  rubricVersion   RubricVersion @relation(fields: [rubricVersionId], references: [id])
+  scores          ReviewScore[]
+
+  @@unique([submissionId, reviewerId])
+  @@index([reviewerId, status])
+}
+
+model ReviewScore {
+  id                String          @id @default(uuid()) @db.Uuid
+  reviewId          String          @db.Uuid
+  rubricCriterionId String          @db.Uuid
+  score             Decimal         @db.Decimal(6, 2)
+  comment           String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  review            Review          @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  rubricCriterion   RubricCriterion @relation(fields: [rubricCriterionId], references: [id])
+
+  @@unique([reviewId, rubricCriterionId])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String   @db.Uuid
+  entityType String
+  entityId   String   @db.Uuid
+  action     String
+  before     Json?
+  after      Json?
+  requestId  String?
+  createdAt  DateTime @default(now())
+  actor      User     @relation("AuditActor", fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+}

@@ -1,0 +1,45 @@
+CREATE TYPE "Role" AS ENUM ('ADMIN', 'EXPERT', 'REVIEWER');
+CREATE TYPE "TaskStatus" AS ENUM ('ASSIGNED', 'IN_PROGRESS', 'SUBMITTED', 'IN_REVIEW', 'REWORK', 'APPROVED');
+CREATE TYPE "ReviewStatus" AS ENUM ('OPEN', 'COMPLETED', 'REWORK_REQUESTED', 'APPROVED');
+
+CREATE TABLE "User" ("id" UUID NOT NULL, "email" TEXT NOT NULL, "passwordHash" TEXT NOT NULL, "role" "Role" NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT "User_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "Project" ("id" UUID NOT NULL, "name" TEXT NOT NULL, "description" TEXT, "createdById" UUID NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP(3) NOT NULL, CONSTRAINT "Project_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "Task" ("id" UUID NOT NULL, "projectId" UUID NOT NULL, "title" TEXT NOT NULL, "instructions" TEXT NOT NULL, "status" "TaskStatus" NOT NULL DEFAULT 'ASSIGNED', "version" INTEGER NOT NULL DEFAULT 0, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP(3) NOT NULL, CONSTRAINT "Task_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "Assignment" ("id" UUID NOT NULL, "taskId" UUID NOT NULL, "expertId" UUID NOT NULL, "assignedById" UUID NOT NULL, "assignedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT "Assignment_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "Submission" ("id" UUID NOT NULL, "taskId" UUID NOT NULL, "expertId" UUID NOT NULL, "version" INTEGER NOT NULL, "content" TEXT NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "submittedAt" TIMESTAMP(3), CONSTRAINT "Submission_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "Rubric" ("id" UUID NOT NULL, "projectId" UUID NOT NULL, "name" TEXT NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT "Rubric_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "RubricVersion" ("id" UUID NOT NULL, "rubricId" UUID NOT NULL, "version" INTEGER NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT "RubricVersion_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "RubricCriterion" ("id" UUID NOT NULL, "rubricVersionId" UUID NOT NULL, "name" TEXT NOT NULL, "description" TEXT, "minScore" DECIMAL(6,2) NOT NULL, "maxScore" DECIMAL(6,2) NOT NULL, "weight" DECIMAL(6,2) NOT NULL, "position" INTEGER NOT NULL, CONSTRAINT "RubricCriterion_pkey" PRIMARY KEY ("id"), CONSTRAINT "criterion_bounds" CHECK ("minScore" <= "maxScore"), CONSTRAINT "criterion_weight" CHECK ("weight" >= 0));
+CREATE TABLE "Review" ("id" UUID NOT NULL, "submissionId" UUID NOT NULL, "reviewerId" UUID NOT NULL, "rubricVersionId" UUID NOT NULL, "status" "ReviewStatus" NOT NULL DEFAULT 'OPEN', "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "completedAt" TIMESTAMP(3), CONSTRAINT "Review_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "ReviewScore" ("id" UUID NOT NULL, "reviewId" UUID NOT NULL, "rubricCriterionId" UUID NOT NULL, "score" DECIMAL(6,2) NOT NULL, "comment" TEXT, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP(3) NOT NULL, CONSTRAINT "ReviewScore_pkey" PRIMARY KEY ("id"));
+CREATE TABLE "AuditLog" ("id" UUID NOT NULL, "actorId" UUID NOT NULL, "entityType" TEXT NOT NULL, "entityId" UUID NOT NULL, "action" TEXT NOT NULL, "before" JSONB, "after" JSONB, "requestId" TEXT, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT "AuditLog_pkey" PRIMARY KEY ("id"));
+
+CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
+CREATE INDEX "Task_projectId_status_idx" ON "Task"("projectId", "status");
+CREATE INDEX "Assignment_expertId_taskId_idx" ON "Assignment"("expertId", "taskId");
+CREATE INDEX "Submission_taskId_createdAt_idx" ON "Submission"("taskId", "createdAt");
+CREATE UNIQUE INDEX "Submission_taskId_version_key" ON "Submission"("taskId", "version");
+CREATE UNIQUE INDEX "RubricVersion_rubricId_version_key" ON "RubricVersion"("rubricId", "version");
+CREATE UNIQUE INDEX "RubricCriterion_rubricVersionId_position_key" ON "RubricCriterion"("rubricVersionId", "position");
+CREATE INDEX "Review_reviewerId_status_idx" ON "Review"("reviewerId", "status");
+CREATE UNIQUE INDEX "Review_submissionId_reviewerId_key" ON "Review"("submissionId", "reviewerId");
+CREATE UNIQUE INDEX "ReviewScore_reviewId_rubricCriterionId_key" ON "ReviewScore"("reviewId", "rubricCriterionId");
+CREATE INDEX "AuditLog_entityType_entityId_idx" ON "AuditLog"("entityType", "entityId");
+CREATE INDEX "AuditLog_actorId_createdAt_idx" ON "AuditLog"("actorId", "createdAt");
+
+ALTER TABLE "Project" ADD CONSTRAINT "Project_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "Task" ADD CONSTRAINT "Task_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "Assignment" ADD CONSTRAINT "Assignment_taskId_fkey" FOREIGN KEY ("taskId") REFERENCES "Task"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "Assignment" ADD CONSTRAINT "Assignment_expertId_fkey" FOREIGN KEY ("expertId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "Assignment" ADD CONSTRAINT "Assignment_assignedById_fkey" FOREIGN KEY ("assignedById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "Submission" ADD CONSTRAINT "Submission_taskId_fkey" FOREIGN KEY ("taskId") REFERENCES "Task"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "Submission" ADD CONSTRAINT "Submission_expertId_fkey" FOREIGN KEY ("expertId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "Rubric" ADD CONSTRAINT "Rubric_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "RubricVersion" ADD CONSTRAINT "RubricVersion_rubricId_fkey" FOREIGN KEY ("rubricId") REFERENCES "Rubric"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "RubricCriterion" ADD CONSTRAINT "RubricCriterion_rubricVersionId_fkey" FOREIGN KEY ("rubricVersionId") REFERENCES "RubricVersion"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "Review" ADD CONSTRAINT "Review_submissionId_fkey" FOREIGN KEY ("submissionId") REFERENCES "Submission"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "Review" ADD CONSTRAINT "Review_reviewerId_fkey" FOREIGN KEY ("reviewerId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "Review" ADD CONSTRAINT "Review_rubricVersionId_fkey" FOREIGN KEY ("rubricVersionId") REFERENCES "RubricVersion"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "ReviewScore" ADD CONSTRAINT "ReviewScore_reviewId_fkey" FOREIGN KEY ("reviewId") REFERENCES "Review"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "ReviewScore" ADD CONSTRAINT "ReviewScore_rubricCriterionId_fkey" FOREIGN KEY ("rubricCriterionId") REFERENCES "RubricCriterion"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "AuditLog" ADD CONSTRAINT "AuditLog_actorId_fkey" FOREIGN KEY ("actorId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
