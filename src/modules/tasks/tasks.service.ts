@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, Role, SubmissionStatus, TaskStatus } from '@prisma/client';
+import { AuditAction, Prisma, Role, SubmissionStatus, TaskStatus } from '@prisma/client';
 import { paginationMeta } from '../../common/dto/pagination.dto';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { PrismaService } from '../../database/prisma.service';
@@ -14,7 +14,6 @@ import { TaskWorkflowService } from './task-workflow.service';
 
 const taskDetails = {
   project: true,
-  assignments: true,
 };
 
 @Injectable()
@@ -40,7 +39,7 @@ export class TasksService {
           actorId: actor.id,
           entityType: 'Task',
           entityId: task.id,
-          action: 'TASK_CREATED',
+          action: AuditAction.TASK_CREATED,
           after: { projectId, title: task.title, status: task.status },
           requestId,
         },
@@ -61,7 +60,10 @@ export class TasksService {
       }),
       this.prisma.task.count({ where }),
     ]);
-    return { data, meta: paginationMeta(page, limit, total) };
+    return {
+      data: data.map((task) => this.withVisibleSubmissions(task)),
+      meta: paginationMeta(page, limit, total),
+    };
   }
 
   async assign(actor: AuthenticatedUser, taskId: string, expertId: string, requestId?: string) {
@@ -87,7 +89,7 @@ export class TasksService {
           actorId: actor.id,
           entityType: 'Assignment',
           entityId: assignment.id,
-          action: 'EXPERT_ASSIGNED',
+          action: AuditAction.EXPERT_ASSIGNED,
           after: { taskId: task.id, expertId },
           requestId,
         },
@@ -119,7 +121,7 @@ export class TasksService {
       throw new ForbiddenException({ code: 'FORBIDDEN', message: 'No assigned review for task' });
     }
 
-    return { ...task, reviews };
+    return { ...this.withVisibleSubmissions(task), reviews };
   }
 
   transition(
@@ -138,7 +140,7 @@ export class TasksService {
             actorId: actor.id,
             entityType: 'Submission',
             entityId: submission.id,
-            action: 'SUBMISSION_SUBMITTED',
+            action: AuditAction.SUBMISSION_SUBMITTED,
             before: { status: SubmissionStatus.DRAFT },
             after: { status: SubmissionStatus.SUBMITTED, version: submission.version },
             requestId,
@@ -161,22 +163,30 @@ export class TasksService {
     if (actor.role === Role.EXPERT) {
       return { assignments: { some: { expertId: actor.id } } };
     }
-    return { submissions: { some: { reviews: { some: { reviewerId: actor.id } } } } };
+    return {
+      assignments: {
+        some: { submissions: { some: { reviews: { some: { reviewerId: actor.id } } } } },
+      },
+    };
   }
 
   private taskDetailsFor(actor: AuthenticatedUser) {
     return {
       ...taskDetails,
-      submissions: {
-        where: this.submissionVisibilityFor(actor),
-        orderBy: { version: 'desc' as const },
+      assignments: {
+        include: {
+          submissions: {
+            where: this.submissionVisibilityFor(actor),
+            orderBy: { version: 'desc' as const },
+          },
+        },
       },
     };
   }
 
   private submissionVisibilityFor(actor: AuthenticatedUser): Prisma.SubmissionWhereInput {
     if (actor.role === Role.ADMIN) return {};
-    if (actor.role === Role.EXPERT) return { expertId: actor.id };
+    if (actor.role === Role.EXPERT) return { assignment: { expertId: actor.id } };
     return { reviews: { some: { reviewerId: actor.id } } };
   }
 
@@ -185,7 +195,7 @@ export class TasksService {
 
     return this.prisma.review.findMany({
       where: {
-        submission: { taskId },
+        submission: { assignment: { taskId } },
         ...(actor.role === Role.REVIEWER ? { reviewerId: actor.id } : {}),
       },
       include: {
@@ -202,7 +212,7 @@ export class TasksService {
     taskId: string,
   ) {
     const latestSubmission = await transaction.submission.findFirst({
-      where: { taskId, expertId: actor.id },
+      where: { assignment: { taskId, expertId: actor.id } },
       orderBy: { version: 'desc' },
     });
 
@@ -228,6 +238,13 @@ export class TasksService {
   private lockTaskForSubmissionLifecycle(transaction: Prisma.TransactionClient, taskId: string) {
     // Submission creation locks the same parent row, preventing a draft version from racing a submit.
     return transaction.$executeRaw`SELECT 1 FROM "Task" WHERE id = ${taskId}::uuid FOR UPDATE`;
+  }
+
+  private withVisibleSubmissions<T extends { assignments: { submissions: unknown[] }[] }>(task: T) {
+    return {
+      ...task,
+      submissions: task.assignments.flatMap((assignment) => assignment.submissions),
+    };
   }
 
   private async getTaskOrThrow(taskId: string) {

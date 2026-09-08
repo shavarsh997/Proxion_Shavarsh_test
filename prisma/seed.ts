@@ -76,13 +76,11 @@ async function main() {
       status: TaskStatus.ASSIGNED,
     },
   });
-  const existingAssignment = await prisma.assignment.findFirst({
-    where: { taskId: task.id, expertId: expert.id },
+  const assignment = await prisma.assignment.upsert({
+    where: { taskId_expertId: { taskId: task.id, expertId: expert.id } },
+    update: {},
+    create: { taskId: task.id, expertId: expert.id, assignedById: admin.id },
   });
-  if (!existingAssignment)
-    await prisma.assignment.create({
-      data: { taskId: task.id, expertId: expert.id, assignedById: admin.id },
-    });
   let rubric = await prisma.rubric.findFirst({
     where: { projectId: project.id, name: 'Quality rubric' },
   });
@@ -127,6 +125,7 @@ async function main() {
     reviewerB: reviewerB.email,
     projectId: project.id,
     taskId: task.id,
+    assignmentId: assignment.id,
     rubricId: rubric.id,
   });
 }

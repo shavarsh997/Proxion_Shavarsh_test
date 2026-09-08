@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../../database/prisma.service';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import {
+  AuditAction,
   Prisma,
   ReviewDecision,
   ReviewStatus,
@@ -45,11 +46,11 @@ export class ReviewsService {
     return this.prisma.$transaction(async (tx) => {
       const submission = await tx.submission.findUnique({
         where: { id: submissionId },
-        include: { task: true },
+        include: { assignment: { include: { task: true } } },
       });
       if (!submission)
         throw new NotFoundException({ code: 'NOT_FOUND', message: 'Submission not found' });
-      await this.lockTask(tx, submission.taskId);
+      await this.lockTask(tx, submission.assignment.taskId);
       if (submission.status !== SubmissionStatus.SUBMITTED)
         throw new ConflictException({
           code: 'INVALID_STATE_TRANSITION',
@@ -69,7 +70,7 @@ export class ReviewsService {
         where: { id: rubricVersionId },
         include: { rubric: true },
       });
-      if (!rubric || rubric.rubric.projectId !== submission.task.projectId)
+      if (!rubric || rubric.rubric.projectId !== submission.assignment.task.projectId)
         throw new BadRequestException({
           code: 'VALIDATION_ERROR',
           message: 'Rubric version belongs to another project',
@@ -77,13 +78,19 @@ export class ReviewsService {
       const review = await tx.review.create({
         data: { submissionId, reviewerId, rubricVersionId },
       });
-      await this.workflow.transition(tx, actor, submission.taskId, TaskStatus.IN_REVIEW, requestId);
+      await this.workflow.transition(
+        tx,
+        actor,
+        submission.assignment.taskId,
+        TaskStatus.IN_REVIEW,
+        requestId,
+      );
       await tx.auditLog.create({
         data: {
           actorId: actor.id,
           entityType: 'Review',
           entityId: review.id,
-          action: 'REVIEW_CREATED',
+          action: AuditAction.REVIEW_CREATED,
           after: { submissionId, reviewerId, rubricVersionId, status: review.status },
           requestId,
         },
@@ -102,7 +109,9 @@ export class ReviewsService {
       this.prisma.review.findMany({
         where,
         include: {
-          submission: { include: { task: { include: { project: true } } } },
+          submission: {
+            include: { assignment: { include: { task: { include: { project: true } } } } },
+          },
           rubricVersion: { include: { criteria: { orderBy: { position: 'asc' } } } },
           scores: true,
         },
@@ -120,7 +129,7 @@ export class ReviewsService {
       include: {
         rubricVersion: { include: { criteria: { orderBy: { position: 'asc' } } } },
         scores: true,
-        submission: true,
+        submission: { include: { assignment: true } },
       },
     });
     if (!review) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Review not found' });
@@ -169,7 +178,9 @@ export class ReviewsService {
           actorId: actor.id,
           entityType: 'ReviewScore',
           entityId: savedScore.id,
-          action: previousScore ? 'REVIEW_SCORE_UPDATED' : 'REVIEW_SCORE_CREATED',
+          action: previousScore
+            ? AuditAction.REVIEW_SCORE_UPDATED
+            : AuditAction.REVIEW_SCORE_CREATED,
           before: previousScore
             ? { score: Number(previousScore.score), comment: previousScore.comment }
             : Prisma.JsonNull,
@@ -193,7 +204,7 @@ export class ReviewsService {
       const review = await tx.review.findUnique({
         where: { id: reviewId },
         include: {
-          submission: { include: { task: true } },
+          submission: { include: { assignment: { include: { task: true } } } },
           rubricVersion: { include: { criteria: true } },
           scores: { include: { rubricCriterion: true } },
         },
@@ -206,15 +217,18 @@ export class ReviewsService {
       const targetStatus =
         decision === ReviewDecision.APPROVED ? TaskStatus.APPROVED : TaskStatus.REWORK;
       // TaskWorkflowService remains the single authority for Task.status and task-state audit.
-      await this.workflow.transition(tx, actor, review.submission.taskId, targetStatus, requestId);
+      await this.workflow.transition(
+        tx,
+        actor,
+        review.submission.assignment.taskId,
+        targetStatus,
+        requestId,
+      );
       const completedAt = new Date();
       const result = await tx.review.updateMany({
         where: { id: review.id, status: ReviewStatus.OPEN },
         data: {
-          status:
-            decision === ReviewDecision.APPROVED
-              ? ReviewStatus.APPROVED
-              : ReviewStatus.REWORK_REQUESTED,
+          status: ReviewStatus.COMPLETED,
           decision,
           completedAt,
         },
@@ -227,7 +241,9 @@ export class ReviewsService {
           entityType: 'Review',
           entityId: review.id,
           action:
-            decision === ReviewDecision.APPROVED ? 'REVIEW_APPROVED' : 'REVIEW_REWORK_REQUESTED',
+            decision === ReviewDecision.APPROVED
+              ? AuditAction.REVIEW_APPROVED
+              : AuditAction.REVIEW_REWORK_REQUESTED,
           before: {
             status: review.status,
             decision: review.decision,

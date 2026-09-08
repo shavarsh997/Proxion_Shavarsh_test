@@ -72,7 +72,10 @@ describe('core workflow (e2e)', () => {
       .post(`/projects/${project.body.id}/tasks`)
       .send({ title: 'Review this response', instructions: 'Use the rubric.' })
       .expect(201);
-    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertAId }).expect(201);
+    const assignment = await adminApi
+      .post(`/tasks/${task.body.id}/assign`)
+      .send({ expertId: expertAId })
+      .expect(201);
     const rubric = await adminApi
       .post(`/projects/${project.body.id}/rubrics`)
       .send({
@@ -86,7 +89,7 @@ describe('core workflow (e2e)', () => {
     await expertApi.post(`/tasks/${task.body.id}/start`).expect(201);
     const v1 = await expertApi
       .post(`/tasks/${task.body.id}/submissions`)
-      .send({ content: 'First version' })
+      .send({ assignmentId: assignment.body.id, content: 'First version' })
       .expect(201);
     await expertApi.post(`/tasks/${task.body.id}/submit`).expect(201);
     await expertApi
@@ -110,7 +113,7 @@ describe('core workflow (e2e)', () => {
     await expertApi.post(`/tasks/${task.body.id}/start`).expect(201);
     const v2 = await expertApi
       .post(`/tasks/${task.body.id}/submissions`)
-      .send({ content: 'Second version' })
+      .send({ assignmentId: assignment.body.id, content: 'Second version' })
       .expect(201);
     await expertApi.post(`/tasks/${task.body.id}/submit`).expect(201);
     const secondReview = await adminApi
@@ -143,6 +146,11 @@ describe('core workflow (e2e)', () => {
     );
 
     const completedReview = await adminApi.get(`/reviews/${secondReview.body.id}`).expect(200);
+    expect(completedReview.body).toMatchObject({
+      status: 'COMPLETED',
+      decision: 'APPROVED',
+      completedAt: expect.any(String),
+    });
     expect(completedReview.body.rubricVersionId).toBe(rubricVersionId);
     expect(completedReview.body.scores).toEqual(
       expect.arrayContaining([
@@ -153,10 +161,9 @@ describe('core workflow (e2e)', () => {
     const auditLog = await adminApi.get('/audit-logs?limit=100').expect(200);
     const taskTransitions = auditLog.body.data.filter(
       (entry: { entityId: string; action: string }) =>
-        entry.entityId === task.body.id &&
-        ['TASK_STARTED', 'TASK_STATUS_CHANGED'].includes(entry.action),
+        entry.entityId === task.body.id && entry.action === 'TASK_STARTED',
     );
-    expect(taskTransitions).toHaveLength(9);
+    expect(taskTransitions).toHaveLength(2);
     expect(auditLog.body.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -184,7 +191,10 @@ describe('core workflow (e2e)', () => {
       .post(`/projects/${project.body.id}/tasks`)
       .send({ title: 'Concurrent workflow', instructions: 'Use the rubric.' })
       .expect(201);
-    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertAId }).expect(201);
+    const assignment = await adminApi
+      .post(`/tasks/${task.body.id}/assign`)
+      .send({ expertId: expertAId })
+      .expect(201);
     const rubric = await adminApi
       .post(`/projects/${project.body.id}/rubrics`)
       .send({
@@ -208,8 +218,12 @@ describe('core workflow (e2e)', () => {
 
     await expertApi.post(`/tasks/${task.body.id}/start`).expect(201);
     const parallelDrafts = await Promise.all([
-      expertApi.post(`/tasks/${task.body.id}/submissions`).send({ content: 'draft A' }),
-      expertApi.post(`/tasks/${task.body.id}/submissions`).send({ content: 'draft B' }),
+      expertApi
+        .post(`/tasks/${task.body.id}/submissions`)
+        .send({ assignmentId: assignment.body.id, content: 'draft A' }),
+      expertApi
+        .post(`/tasks/${task.body.id}/submissions`)
+        .send({ assignmentId: assignment.body.id, content: 'draft B' }),
     ]);
     expect(parallelDrafts.map((response) => response.status)).toEqual([201, 201]);
     expect(new Set(parallelDrafts.map((response) => response.body.version)).size).toBe(2);
@@ -268,21 +282,30 @@ describe('core workflow (e2e)', () => {
     });
     await expertAApi
       .post(`/tasks/${task.body.id}/submissions`)
-      .send({ content: 'Unassigned work must be rejected' })
-      .expect(403);
+      .send({
+        assignmentId: '99999999-9999-4999-8999-999999999999',
+        content: 'Unassigned work must be rejected',
+      })
+      .expect(404);
 
-    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertAId }).expect(201);
+    const assignmentA = await adminApi
+      .post(`/tasks/${task.body.id}/assign`)
+      .send({ expertId: expertAId })
+      .expect(201);
     await expertBApi.post(`/tasks/${task.body.id}/start`).expect(403);
-    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertBId }).expect(201);
+    const assignmentB = await adminApi
+      .post(`/tasks/${task.body.id}/assign`)
+      .send({ expertId: expertBId })
+      .expect(201);
     await expertAApi.post(`/tasks/${task.body.id}/start`).expect(201);
 
     const submissionA = await expertAApi
       .post(`/tasks/${task.body.id}/submissions`)
-      .send({ content: 'Expert A private draft' })
+      .send({ assignmentId: assignmentA.body.id, content: 'Expert A private draft' })
       .expect(201);
     const submissionB = await expertBApi
       .post(`/tasks/${task.body.id}/submissions`)
-      .send({ content: 'Expert B private draft' })
+      .send({ assignmentId: assignmentB.body.id, content: 'Expert B private draft' })
       .expect(201);
 
     await expertAApi.get(`/submissions/${submissionB.body.id}`).expect(403);
@@ -325,8 +348,14 @@ describe('core workflow (e2e)', () => {
         instructions: 'Review only your assignment.',
       })
       .expect(201);
-    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertAId }).expect(201);
-    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertBId }).expect(201);
+    const assignmentA = await adminApi
+      .post(`/tasks/${task.body.id}/assign`)
+      .send({ expertId: expertAId })
+      .expect(201);
+    const assignmentB = await adminApi
+      .post(`/tasks/${task.body.id}/assign`)
+      .send({ expertId: expertBId })
+      .expect(201);
     const rubric = await adminApi
       .post(`/projects/${project.body.id}/rubrics`)
       .send({
@@ -339,7 +368,7 @@ describe('core workflow (e2e)', () => {
     await expertAApi.post(`/tasks/${task.body.id}/start`).expect(201);
     const submissionA = await expertAApi
       .post(`/tasks/${task.body.id}/submissions`)
-      .send({ content: 'Submission assigned to reviewer A' })
+      .send({ assignmentId: assignmentA.body.id, content: 'Submission assigned to reviewer A' })
       .expect(201);
     await expertAApi.post(`/tasks/${task.body.id}/submit`).expect(201);
     const reviewA = await adminApi
@@ -350,7 +379,7 @@ describe('core workflow (e2e)', () => {
     await expertBApi.post(`/tasks/${task.body.id}/start`).expect(201);
     const submissionB = await expertBApi
       .post(`/tasks/${task.body.id}/submissions`)
-      .send({ content: 'Submission not assigned to reviewer A' })
+      .send({ assignmentId: assignmentB.body.id, content: 'Submission not assigned to reviewer A' })
       .expect(201);
 
     await reviewerAApi.get(`/submissions/${submissionA.body.id}`).expect(200);
@@ -381,7 +410,10 @@ describe('core workflow (e2e)', () => {
       .post(`/projects/${project.body.id}/tasks`)
       .send({ title: 'Reviewer ownership', instructions: 'Review ownership is strict.' })
       .expect(201);
-    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertAId }).expect(201);
+    const assignment = await adminApi
+      .post(`/tasks/${task.body.id}/assign`)
+      .send({ expertId: expertAId })
+      .expect(201);
     const rubric = await adminApi
       .post(`/projects/${project.body.id}/rubrics`)
       .send({
@@ -395,7 +427,7 @@ describe('core workflow (e2e)', () => {
     await expertAApi.post(`/tasks/${task.body.id}/start`).expect(201);
     const submission = await expertAApi
       .post(`/tasks/${task.body.id}/submissions`)
-      .send({ content: 'Reviewer B owns this review' })
+      .send({ assignmentId: assignment.body.id, content: 'Reviewer B owns this review' })
       .expect(201);
     await expertAApi.post(`/tasks/${task.body.id}/submit`).expect(201);
     const reviewB = await adminApi

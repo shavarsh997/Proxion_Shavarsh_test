@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, Role, Task, TaskStatus } from '@prisma/client';
+import { AuditAction, Prisma, Role, Task, TaskStatus } from '@prisma/client';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import {
   ConcurrentModificationException,
@@ -35,17 +35,19 @@ export class TaskWorkflowService {
     this.assertTransitionIsAllowed(task.status, targetStatus);
 
     const transitionedTask = await this.updateWithOptimisticLock(transaction, task, targetStatus);
-    await transaction.auditLog.create({
-      data: {
-        actorId: actor.id,
-        entityType: 'Task',
-        entityId: task.id,
-        action: targetStatus === TaskStatus.IN_PROGRESS ? 'TASK_STARTED' : 'TASK_STATUS_CHANGED',
-        before: { status: task.status, version: task.version },
-        after: { status: transitionedTask.status, version: transitionedTask.version },
-        requestId,
-      },
-    });
+    if (targetStatus === TaskStatus.IN_PROGRESS) {
+      await transaction.auditLog.create({
+        data: {
+          actorId: actor.id,
+          entityType: 'Task',
+          entityId: task.id,
+          action: AuditAction.TASK_STARTED,
+          before: { status: task.status, version: task.version },
+          after: { status: transitionedTask.status, version: transitionedTask.version },
+          requestId,
+        },
+      });
+    }
     return transitionedTask;
   }
 

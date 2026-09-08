@@ -70,9 +70,8 @@ describe('review scoring invariants', () => {
       submission: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'submission',
-          taskId: 'task',
           status: SubmissionStatus.SUBMITTED,
-          task: { projectId: 'project' },
+          assignment: { taskId: 'task', task: { projectId: 'project' } },
         }),
       },
       rubricVersion: {
@@ -139,7 +138,7 @@ describe('review scoring invariants', () => {
   it('rejects approval until every rubric criterion has a valid score', async () => {
     const decisionReview = {
       ...review,
-      submission: { taskId: 'task', task: { id: 'task' } },
+      submission: { assignment: { taskId: 'task', task: { id: 'task' } } },
       rubricVersion: {
         criteria: [
           { id: 'criterion-1', minScore: 0, maxScore: 5 },
@@ -175,7 +174,7 @@ describe('review scoring invariants', () => {
   it('completes an approved review and delegates the task transition to the workflow', async () => {
     const decisionReview = {
       ...review,
-      submission: { taskId: 'task', task: { id: 'task' } },
+      submission: { assignment: { taskId: 'task', task: { id: 'task' } } },
       rubricVersion: { criteria: [{ id: 'criterion-1', minScore: 0, maxScore: 5 }] },
       scores: [
         {
@@ -187,7 +186,7 @@ describe('review scoring invariants', () => {
     };
     const completed = {
       ...review,
-      status: ReviewStatus.APPROVED,
+      status: ReviewStatus.COMPLETED,
       decision: ReviewDecision.APPROVED,
       completedAt: new Date(),
     };
@@ -221,13 +220,21 @@ describe('review scoring invariants', () => {
     expect(tx.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ action: 'REVIEW_APPROVED' }),
     });
+    expect(tx.review.updateMany).toHaveBeenCalledWith({
+      where: { id: 'review', status: ReviewStatus.OPEN },
+      data: expect.objectContaining({
+        status: ReviewStatus.COMPLETED,
+        decision: ReviewDecision.APPROVED,
+        completedAt: expect.any(Date),
+      }),
+    });
   });
 
   it('rejects score changes once a review is completed', async () => {
     const tx: any = {
       $executeRaw: jest.fn(),
       review: {
-        findUnique: jest.fn().mockResolvedValue({ ...review, status: ReviewStatus.APPROVED }),
+        findUnique: jest.fn().mockResolvedValue({ ...review, status: ReviewStatus.COMPLETED }),
       },
     };
     await expect(scoreService(tx).score(reviewer, 'review', 'criterion', 5)).rejects.toBeInstanceOf(

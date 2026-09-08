@@ -33,7 +33,7 @@ export class SubmissionsController {
     @Body() dto: CreateSubmissionDto,
     @RequestId() requestId: string,
   ) {
-    return this.submissions.create(actor, taskId, dto.content, requestId);
+    return this.submissions.create(actor, taskId, dto.assignmentId, dto.content, requestId);
   }
 
   @Patch('submissions/:id') @Roles(Role.EXPERT) updateDraft(

@@ -22,10 +22,10 @@ export class TaskAccessPolicy {
 
   async assertCanReadSubmission(
     actor: AuthenticatedUser,
-    submission: { id: string; expertId: string },
+    submission: { id: string; assignment: { expertId: string } },
   ) {
     if (actor.role === Role.ADMIN) return;
-    if (actor.role === Role.EXPERT && submission.expertId === actor.id) return;
+    if (actor.role === Role.EXPERT && submission.assignment.expertId === actor.id) return;
     if (
       actor.role === Role.REVIEWER &&
       (await this.prisma.review.findFirst({
@@ -70,7 +70,9 @@ export class TaskAccessPolicy {
     taskId: string,
   ) {
     return Boolean(
-      await client.review.findFirst({ where: { reviewerId, submission: { taskId } } }),
+      await client.review.findFirst({
+        where: { reviewerId, submission: { assignment: { taskId } } },
+      }),
     );
   }
 
@@ -81,7 +83,11 @@ export class TaskAccessPolicy {
   ) {
     return Boolean(
       await client.review.findFirst({
-        where: { reviewerId, status: ReviewStatus.OPEN, submission: { taskId } },
+        where: {
+          reviewerId,
+          status: ReviewStatus.OPEN,
+          submission: { assignment: { taskId } },
+        },
       }),
     );
   }

@@ -6,8 +6,7 @@ describe('immutable submission versions', () => {
     const records: any[] = [
       {
         id: 'v1',
-        taskId: 'task',
-        expertId: 'expert',
+        assignmentId: 'assignment',
         version: 1,
         status: SubmissionStatus.SUBMITTED,
         content: 'original',
@@ -18,7 +17,11 @@ describe('immutable submission versions', () => {
       task: {
         findUnique: jest.fn().mockResolvedValue({ id: 'task', status: TaskStatus.IN_PROGRESS }),
       },
-      assignment: { findFirst: jest.fn().mockResolvedValue({ id: 'a' }) },
+      assignment: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'assignment', taskId: 'task', expertId: 'expert' }),
+      },
       auditLog: { create: jest.fn() },
       submission: {
         findFirst: jest.fn(async () => records[records.length - 1]),
@@ -34,6 +37,7 @@ describe('immutable submission versions', () => {
     const created = await service.create(
       { id: 'expert', email: 'expert@test.local', role: Role.EXPERT },
       'task',
+      'assignment',
       'reworked',
     );
     expect(created.version).toBe(2);
@@ -51,5 +55,28 @@ describe('immutable submission versions', () => {
         }),
       ]),
     );
+  });
+
+  it('rejects an assignment owned by another expert', async () => {
+    const tx: any = {
+      assignment: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'assignment', taskId: 'task', expertId: 'other-expert' }),
+      },
+    };
+    const service = new SubmissionsService(
+      { $transaction: (fn: any) => fn(tx) } as any,
+      { assertCanRead: jest.fn() } as any,
+    );
+
+    await expect(
+      service.create(
+        { id: 'expert', email: 'expert@test.local', role: Role.EXPERT },
+        'task',
+        'assignment',
+        'content',
+      ),
+    ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'FORBIDDEN' }) });
   });
 });

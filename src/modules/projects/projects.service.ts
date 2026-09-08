@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { AuditAction } from '@prisma/client';
 import { paginationMeta } from '../../common/dto/pagination.dto';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { PrismaService } from '../../database/prisma.service';
@@ -21,7 +22,7 @@ export class ProjectsService {
           actorId: actor.id,
           entityType: 'Project',
           entityId: project.id,
-          action: 'PROJECT_CREATED',
+          action: AuditAction.PROJECT_CREATED,
           after: { name: project.name },
           requestId,
         },

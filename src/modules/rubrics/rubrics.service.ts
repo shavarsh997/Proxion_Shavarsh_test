@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { AuditAction } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 export interface CriterionInput {
@@ -33,7 +34,7 @@ export class RubricsService {
             actorId: actor.id,
             entityType: 'Rubric',
             entityId: rubric.id,
-            action: 'RUBRIC_CREATED',
+            action: AuditAction.RUBRIC_CREATED,
             after: { projectId, name },
             requestId,
           },
@@ -41,7 +42,7 @@ export class RubricsService {
             actorId: actor.id,
             entityType: 'RubricVersion',
             entityId: version.id,
-            action: 'RUBRIC_VERSION_CREATED',
+            action: AuditAction.RUBRIC_VERSION_CREATED,
             after: {
               rubricId: rubric.id,
               version: version.version,
@@ -83,7 +84,7 @@ export class RubricsService {
           actorId: actor.id,
           entityType: 'RubricVersion',
           entityId: version.id,
-          action: 'RUBRIC_VERSION_CREATED',
+          action: AuditAction.RUBRIC_VERSION_CREATED,
           after: { rubricId, version: version.version, criteriaCount: criteria.length },
           requestId,
         },

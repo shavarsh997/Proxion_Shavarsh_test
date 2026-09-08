@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Role, SubmissionStatus, TaskStatus } from '@prisma/client';
+import { AuditAction, Role, SubmissionStatus, TaskStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { PrismaService } from '../../database/prisma.service';
@@ -18,7 +18,13 @@ export class SubmissionsService {
     private readonly taskAccess: TaskAccessPolicy,
   ) {}
 
-  async create(actor: AuthenticatedUser, taskId: string, content: string, requestId?: string) {
+  async create(
+    actor: AuthenticatedUser,
+    taskId: string,
+    assignmentId: string,
+    content: string,
+    requestId?: string,
+  ) {
     if (actor.role !== Role.EXPERT) {
       throw new ForbiddenException({
         code: 'FORBIDDEN',
@@ -28,21 +34,30 @@ export class SubmissionsService {
 
     return this.prisma.$transaction(async (transaction) => {
       // Locking the parent Task serializes v(n + 1) allocation and submit finalization for one task.
+      const assignment = await this.assertExpertCanCreateSubmission(
+        transaction,
+        actor,
+        taskId,
+        assignmentId,
+      );
       await this.lockTaskForSubmissionLifecycle(transaction, taskId);
-
-      await this.assertExpertCanCreateSubmission(transaction, actor, taskId);
-      const nextVersion = await this.getNextVersion(transaction, taskId);
+      const nextVersion = await this.getNextVersion(transaction, assignment.id);
 
       const submission = await transaction.submission.create({
-        data: { taskId, expertId: actor.id, version: nextVersion, content },
+        data: { assignmentId: assignment.id, version: nextVersion, content },
       });
       await transaction.auditLog.create({
         data: {
           actorId: actor.id,
           entityType: 'Submission',
           entityId: submission.id,
-          action: 'SUBMISSION_CREATED',
-          after: { taskId, version: submission.version, status: submission.status },
+          action: AuditAction.SUBMISSION_CREATED,
+          after: {
+            assignmentId: assignment.id,
+            taskId,
+            version: submission.version,
+            status: submission.status,
+          },
           requestId,
         },
       });
@@ -53,7 +68,7 @@ export class SubmissionsService {
   async list(actor: AuthenticatedUser, taskId: string) {
     await this.taskAccess.assertCanRead(actor, taskId);
     return this.prisma.submission.findMany({
-      where: { taskId, ...this.submissionVisibilityFor(actor) },
+      where: { assignment: { taskId }, ...this.submissionVisibilityFor(actor) },
       orderBy: { version: 'asc' },
     });
   }
@@ -67,26 +82,26 @@ export class SubmissionsService {
     return this.prisma.$transaction(async (transaction) => {
       const submission = await transaction.submission.findUnique({
         where: { id: submissionId },
-        include: { task: true },
+        include: { assignment: { include: { task: true } } },
       });
       if (!submission) {
         throw new NotFoundException({ code: 'NOT_FOUND', message: 'Submission not found' });
       }
 
       // Uses the same lock as finalization, so a draft cannot be modified after it becomes submitted.
-      await this.lockTaskForSubmissionLifecycle(transaction, submission.taskId);
+      await this.lockTaskForSubmissionLifecycle(transaction, submission.assignment.taskId);
       const lockedSubmission = await transaction.submission.findUniqueOrThrow({
         where: { id: submissionId },
-        include: { task: true },
+        include: { assignment: { include: { task: true } } },
       });
-      if (lockedSubmission.expertId !== actor.id) {
+      if (lockedSubmission.assignment.expertId !== actor.id) {
         throw new ForbiddenException({
           code: 'FORBIDDEN',
           message: 'Only the submission author can update a draft',
         });
       }
       this.assertDraftIsMutable(lockedSubmission.status);
-      if (lockedSubmission.task.status !== TaskStatus.IN_PROGRESS) {
+      if (lockedSubmission.assignment.task.status !== TaskStatus.IN_PROGRESS) {
         throw new ConflictException({
           code: 'INVALID_STATE_TRANSITION',
           message: 'Draft submissions can only be updated while work is in progress',
@@ -102,7 +117,7 @@ export class SubmissionsService {
           actorId: actor.id,
           entityType: 'Submission',
           entityId: updated.id,
-          action: 'SUBMISSION_UPDATED',
+          action: AuditAction.SUBMISSION_UPDATED,
           before: { contentLength: lockedSubmission.content.length },
           after: { contentLength: updated.content.length },
           requestId,
@@ -115,7 +130,7 @@ export class SubmissionsService {
   async get(actor: AuthenticatedUser, submissionId: string) {
     const submission = await this.prisma.submission.findUnique({
       where: { id: submissionId },
-      include: { task: { include: { assignments: true } } },
+      include: { assignment: true },
     });
     if (!submission) {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Submission not found' });
@@ -127,7 +142,7 @@ export class SubmissionsService {
 
   private submissionVisibilityFor(actor: AuthenticatedUser): Prisma.SubmissionWhereInput {
     if (actor.role === Role.ADMIN) return {};
-    if (actor.role === Role.EXPERT) return { expertId: actor.id };
+    if (actor.role === Role.EXPERT) return { assignment: { expertId: actor.id } };
     return { reviews: { some: { reviewerId: actor.id } } };
   }
 
@@ -135,17 +150,27 @@ export class SubmissionsService {
     transaction: Prisma.TransactionClient,
     actor: AuthenticatedUser,
     taskId: string,
+    assignmentId: string,
   ) {
+    const assignment = await transaction.assignment.findUnique({ where: { id: assignmentId } });
+    if (!assignment) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Assignment not found' });
+    }
+    if (assignment.taskId !== taskId) {
+      throw new ConflictException({
+        code: 'VALIDATION_ERROR',
+        message: 'Assignment does not belong to this task',
+      });
+    }
+    if (assignment.expertId !== actor.id) {
+      throw new ForbiddenException({
+        code: 'FORBIDDEN',
+        message: 'Assignment is not assigned to you',
+      });
+    }
     const task = await transaction.task.findUnique({ where: { id: taskId } });
     if (!task) {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Task not found' });
-    }
-
-    const assignment = await transaction.assignment.findFirst({
-      where: { taskId, expertId: actor.id },
-    });
-    if (!assignment) {
-      throw new ForbiddenException({ code: 'FORBIDDEN', message: 'Task is not assigned to you' });
     }
     if (task.status !== TaskStatus.IN_PROGRESS) {
       throw new ConflictException({
@@ -153,11 +178,12 @@ export class SubmissionsService {
         message: 'Submissions can only be created while work is in progress',
       });
     }
+    return assignment;
   }
 
-  private async getNextVersion(transaction: Prisma.TransactionClient, taskId: string) {
+  private async getNextVersion(transaction: Prisma.TransactionClient, assignmentId: string) {
     const latestSubmission = await transaction.submission.findFirst({
-      where: { taskId },
+      where: { assignmentId },
       orderBy: { version: 'desc' },
       select: { version: true },
     });

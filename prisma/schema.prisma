@@ -26,8 +26,6 @@ enum TaskStatus {
 enum ReviewStatus {
   OPEN
   COMPLETED
-  REWORK_REQUESTED
-  APPROVED
 }
 
 enum ReviewDecision {
@@ -40,6 +38,23 @@ enum SubmissionStatus {
   SUBMITTED
 }
 
+enum AuditAction {
+  PROJECT_CREATED
+  TASK_CREATED
+  EXPERT_ASSIGNED
+  TASK_STARTED
+  SUBMISSION_CREATED
+  SUBMISSION_UPDATED
+  SUBMISSION_SUBMITTED
+  RUBRIC_CREATED
+  RUBRIC_VERSION_CREATED
+  REVIEW_CREATED
+  REVIEW_SCORE_CREATED
+  REVIEW_SCORE_UPDATED
+  REVIEW_APPROVED
+  REVIEW_REWORK_REQUESTED
+}
+
 model User {
   id                  String       @id @default(uuid()) @db.Uuid
   email               String       @unique
@@ -50,7 +65,6 @@ model User {
   projects            Project[]    @relation("ProjectCreator")
   assignedAssignments Assignment[] @relation("AssignedExpert")
   madeAssignments     Assignment[] @relation("AssignmentMaker")
-  submissions         Submission[]
   reviews             Review[]
   auditLogs           AuditLog[]   @relation("AuditActor")
 }
@@ -78,7 +92,6 @@ model Task {
   updatedAt    DateTime     @updatedAt
   project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   assignments  Assignment[]
-  submissions  Submission[]
 
   @@index([projectId, status])
 }
@@ -92,6 +105,7 @@ model Assignment {
   task         Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
   expert       User     @relation("AssignedExpert", fields: [expertId], references: [id])
   assignedBy   User     @relation("AssignmentMaker", fields: [assignedById], references: [id])
+  submissions  Submission[]
 
   @@index([expertId, taskId])
   @@index([taskId])
@@ -99,22 +113,20 @@ model Assignment {
 }
 
 model Submission {
-  id          String           @id @default(uuid()) @db.Uuid
-  taskId      String           @db.Uuid
-  expertId    String           @db.Uuid
-  version     Int
-  status      SubmissionStatus @default(DRAFT)
-  content     String
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
-  submittedAt DateTime?
-  task        Task             @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  expert      User             @relation(fields: [expertId], references: [id])
-  reviews     Review[]
+  id           String           @id @default(uuid()) @db.Uuid
+  assignmentId String           @db.Uuid
+  version      Int
+  status       SubmissionStatus @default(DRAFT)
+  content      String
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  submittedAt  DateTime?
+  assignment   Assignment       @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  reviews      Review[]
 
-  @@unique([taskId, version])
-  @@index([taskId, createdAt])
-  @@index([taskId, status])
+  @@unique([assignmentId, version])
+  @@index([assignmentId, createdAt])
+  @@index([assignmentId, status])
 }
 
 model Rubric {
@@ -190,7 +202,7 @@ model AuditLog {
   actorId    String   @db.Uuid
   entityType String
   entityId   String   @db.Uuid
-  action     String
+  action     AuditAction
   before     Json?
   after      Json?
   requestId  String?
