@@ -211,6 +211,27 @@ List endpoints use `?page=1&limit=20`, with a maximum `limit` of 100, and return
 - `POST /submissions/:submissionId/reviews`, `GET|PUT /reviews`
 - `GET /audit-logs` for admins
 
+Example expert flow after an administrator has created and assigned a task:
+
+```bash
+# Obtain the expert token.
+curl -X POST http://localhost:3000/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"expert@proxion.local","password":"Password123!"}'
+
+# Set TOKEN to accessToken from the response, then start, draft, and submit the task.
+curl -X POST http://localhost:3000/tasks/<task-id>/start \
+  -H "Authorization: Bearer $TOKEN"
+curl -X POST http://localhost:3000/tasks/<task-id>/submissions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"My completed work"}'
+curl -X POST http://localhost:3000/tasks/<task-id>/submit \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+An administrator creates a review using a particular immutable `rubricVersionId`; only the assigned reviewer can then `PUT /reviews/<review-id>/scores/<criterion-id>`. Swagger documents all request shapes and role-protected endpoints at `/api/docs`.
+
 Run backend checks with:
 
 ```bash
@@ -234,6 +255,6 @@ It covers login, project/task/rubric setup, assignment, v1 submission, scoring, 
 
 ## Scope and scaling limits
 
-The sample deliberately excludes file storage, queues, Redis, microservices, Kubernetes, OAuth/SSO, and broad observability infrastructure.
+The sample deliberately excludes a production frontend/client portal, file storage, bulk import/export, LLM integrations and model gateways, queues, Redis, microservices, Kubernetes, OAuth/SSO, and broad observability infrastructure. `dev-client/` remains an isolated development-only API exerciser, not a deployed product client.
 
 The first practical pressure points at scale are AuditLog growth, large project/task list queries, offset pagination, PostgreSQL connection limits, concurrent writes to hot Tasks, and large Submission payloads. Likely next steps are cursor pagination and projections, audit retention or partitioning, object storage for documents, structured logs and metrics, and background processing for long-running model-evaluation work. A queue becomes appropriate only once those asynchronous workloads exist.

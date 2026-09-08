@@ -23,13 +23,11 @@ import { CreateProjectDto } from './dto/create-project.dto';
 @ApiTags('projects')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.ADMIN)
 export class ProjectsController {
   constructor(private readonly projects: ProjectsService) {}
 
-  @Post() @Roles(Role.ADMIN) create(
-    @CurrentUser() actor: AuthenticatedUser,
-    @Body() dto: CreateProjectDto,
-  ) {
+  @Post() create(@CurrentUser() actor: AuthenticatedUser, @Body() dto: CreateProjectDto) {
     return this.projects.create(actor, dto);
   }
 

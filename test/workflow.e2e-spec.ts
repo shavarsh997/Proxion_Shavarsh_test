@@ -28,6 +28,17 @@ function authenticatedApi(accessToken: string): AuthenticatedApi {
 }
 
 describe('core workflow (e2e)', () => {
+  it('returns a validation code and prevents non-admin project access', async () => {
+    const invalidLogin = await request(baseUrl)
+      .post('/auth/login')
+      .send({ email: 'not-an-email' })
+      .expect(400);
+    expect(invalidLogin.body.code).toBe('VALIDATION_ERROR');
+
+    const expert = await login('expert@proxion.local');
+    await authenticatedApi(expert.accessToken).get('/projects').expect(403);
+  });
+
   it('preserves submitted versions through rework and approval with an audit trail', async () => {
     const [admin, expert, reviewer] = await Promise.all([
       login('admin@proxion.local'),

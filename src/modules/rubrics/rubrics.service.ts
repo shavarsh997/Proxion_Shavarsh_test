@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 export interface CriterionInput {
   name: string;
@@ -11,7 +11,9 @@ export interface CriterionInput {
 @Injectable()
 export class RubricsService {
   constructor(private readonly prisma: PrismaService) {}
+
   async create(projectId: string, name: string, criteria: CriterionInput[]) {
+    this.assertCriteriaAreValid(criteria);
     await this.requireProject(projectId);
     return this.prisma.$transaction(async (tx) => {
       const rubric = await tx.rubric.create({ data: { projectId, name } });
@@ -25,6 +27,7 @@ export class RubricsService {
     });
   }
   async version(rubricId: string, criteria: CriterionInput[]) {
+    this.assertCriteriaAreValid(criteria);
     return this.prisma.$transaction(async (tx) => {
       const rubric = await tx.rubric.findUnique({ where: { id: rubricId } });
       if (!rubric) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Rubric not found' });
@@ -53,5 +56,24 @@ export class RubricsService {
   private async requireProject(id: string) {
     if (!(await this.prisma.project.findUnique({ where: { id } })))
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Project not found' });
+  }
+
+  private assertCriteriaAreValid(criteria: CriterionInput[]) {
+    const positions = new Set<number>();
+    for (const criterion of criteria) {
+      if (criterion.minScore > criterion.maxScore) {
+        throw new BadRequestException({
+          code: 'VALIDATION_ERROR',
+          message: 'Criterion minScore cannot exceed maxScore',
+        });
+      }
+      if (positions.has(criterion.position)) {
+        throw new BadRequestException({
+          code: 'VALIDATION_ERROR',
+          message: 'Criterion positions must be unique within a rubric version',
+        });
+      }
+      positions.add(criterion.position);
+    }
   }
 }

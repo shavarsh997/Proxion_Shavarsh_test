@@ -48,7 +48,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
       const details: ErrorBody = typeof body === 'string' ? { message: body } : body;
       return {
         statusCode: exception.getStatus(),
-        code: details.code ?? 'HTTP_ERROR',
+        code: details.code ?? (exception.getStatus() === 400 ? 'VALIDATION_ERROR' : 'HTTP_ERROR'),
         message: details.message ?? exception.message,
       };
     }
