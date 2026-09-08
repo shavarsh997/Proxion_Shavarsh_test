@@ -58,7 +58,7 @@ export class SubmissionsService {
             version: submission.version,
             status: submission.status,
           },
-          requestId,
+          requestId: requestId ?? null,
         },
       });
       return submission;
@@ -120,7 +120,7 @@ export class SubmissionsService {
           action: AuditAction.SUBMISSION_UPDATED,
           before: { contentLength: lockedSubmission.content.length },
           after: { contentLength: updated.content.length },
-          requestId,
+          requestId: requestId ?? null,
         },
       });
       return updated;

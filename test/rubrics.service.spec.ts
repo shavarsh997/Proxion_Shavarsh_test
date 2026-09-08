@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
-import { RubricsService } from '../src/modules/rubrics/rubrics.service';
 import { Role } from '@prisma/client';
+import type { PrismaService } from '../src/database/prisma.service';
+import { RubricsService } from '../src/modules/rubrics/rubrics.service';
 
 const admin = { id: 'admin', email: 'admin@test.local', role: Role.ADMIN };
 
@@ -14,7 +15,7 @@ const criterion = {
 
 describe('rubric criteria invariants', () => {
   it('rejects a criterion whose minimum score exceeds its maximum score', async () => {
-    const service = new RubricsService({} as any);
+    const service = new RubricsService({} as unknown as PrismaService);
 
     await expect(
       service.create(admin, 'project', 'Quality', [{ ...criterion, minScore: 6, maxScore: 5 }]),
@@ -22,7 +23,7 @@ describe('rubric criteria invariants', () => {
   });
 
   it('rejects duplicate criterion positions before writing a rubric version', async () => {
-    const service = new RubricsService({} as any);
+    const service = new RubricsService({} as unknown as PrismaService);
 
     await expect(
       service.version(admin, 'rubric', [criterion, { ...criterion, name: 'Clarity' }]),

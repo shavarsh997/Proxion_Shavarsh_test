@@ -44,7 +44,7 @@ export class TaskWorkflowService {
           action: AuditAction.TASK_STARTED,
           before: { status: task.status, version: task.version },
           after: { status: transitionedTask.status, version: transitionedTask.version },
-          requestId,
+          requestId: requestId ?? null,
         },
       });
     }

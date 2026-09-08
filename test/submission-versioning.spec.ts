@@ -1,9 +1,33 @@
 import { Role, SubmissionStatus, TaskStatus } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
+import type { PrismaService } from '../src/database/prisma.service';
 import { SubmissionsService } from '../src/modules/submissions/submissions.service';
+import { TaskAccessPolicy } from '../src/modules/tasks/task-access.policy';
+
+interface SubmissionRecord {
+  id: string;
+  assignmentId: string;
+  version: number;
+  status: SubmissionStatus;
+  content: string;
+}
+
+type SubmissionCreateInput = Pick<SubmissionRecord, 'assignmentId' | 'version' | 'content'>;
+
+function transactionClient(transaction: unknown): Prisma.TransactionClient {
+  return transaction as Prisma.TransactionClient;
+}
+
+function transactionalPrisma(transaction: unknown): PrismaService {
+  return {
+    $transaction: (callback: (client: Prisma.TransactionClient) => Promise<unknown>) =>
+      callback(transactionClient(transaction)),
+  } as unknown as PrismaService;
+}
 
 describe('immutable submission versions', () => {
   it('retains v1 unchanged when a rework cycle creates v2', async () => {
-    const records: any[] = [
+    const records: SubmissionRecord[] = [
       {
         id: 'v1',
         assignmentId: 'assignment',
@@ -12,7 +36,7 @@ describe('immutable submission versions', () => {
         content: 'original',
       },
     ];
-    const tx: any = {
+    const tx = {
       $executeRaw: jest.fn(),
       task: {
         findUnique: jest.fn().mockResolvedValue({ id: 'task', status: TaskStatus.IN_PROGRESS }),
@@ -25,15 +49,17 @@ describe('immutable submission versions', () => {
       auditLog: { create: jest.fn() },
       submission: {
         findFirst: jest.fn(async () => records[records.length - 1]),
-        create: jest.fn(async ({ data }: any) => {
+        create: jest.fn(async ({ data }: { data: SubmissionCreateInput }) => {
           const next = { id: 'v2', status: SubmissionStatus.DRAFT, ...data };
           records.push(next);
           return next;
         }),
       },
     };
-    const prisma: any = { $transaction: (fn: any) => fn(tx) };
-    const service = new SubmissionsService(prisma, { assertCanRead: jest.fn() } as any);
+    const service = new SubmissionsService(
+      transactionalPrisma(tx),
+      new TaskAccessPolicy({} as unknown as PrismaService),
+    );
     const created = await service.create(
       { id: 'expert', email: 'expert@test.local', role: Role.EXPERT },
       'task',
@@ -58,7 +84,7 @@ describe('immutable submission versions', () => {
   });
 
   it('rejects an assignment owned by another expert', async () => {
-    const tx: any = {
+    const tx = {
       assignment: {
         findUnique: jest
           .fn()
@@ -66,8 +92,8 @@ describe('immutable submission versions', () => {
       },
     };
     const service = new SubmissionsService(
-      { $transaction: (fn: any) => fn(tx) } as any,
-      { assertCanRead: jest.fn() } as any,
+      transactionalPrisma(tx),
+      new TaskAccessPolicy({} as unknown as PrismaService),
     );
 
     await expect(

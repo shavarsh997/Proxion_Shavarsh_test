@@ -41,7 +41,7 @@ export class TasksService {
           entityId: task.id,
           action: AuditAction.TASK_CREATED,
           after: { projectId, title: task.title, status: task.status },
-          requestId,
+          requestId: requestId ?? null,
         },
       });
       return task;
@@ -91,7 +91,7 @@ export class TasksService {
           entityId: assignment.id,
           action: AuditAction.EXPERT_ASSIGNED,
           after: { taskId: task.id, expertId },
-          requestId,
+          requestId: requestId ?? null,
         },
       });
       if (lockedTask.status === TaskStatus.UNASSIGNED) {
@@ -143,7 +143,7 @@ export class TasksService {
             action: AuditAction.SUBMISSION_SUBMITTED,
             before: { status: SubmissionStatus.DRAFT },
             after: { status: SubmissionStatus.SUBMITTED, version: submission.version },
-            requestId,
+            requestId: requestId ?? null,
           },
         });
       }

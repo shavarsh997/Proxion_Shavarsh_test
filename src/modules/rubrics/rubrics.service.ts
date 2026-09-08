@@ -36,7 +36,7 @@ export class RubricsService {
             entityId: rubric.id,
             action: AuditAction.RUBRIC_CREATED,
             after: { projectId, name },
-            requestId,
+            requestId: requestId ?? null,
           },
           {
             actorId: actor.id,
@@ -48,7 +48,7 @@ export class RubricsService {
               version: version.version,
               criteriaCount: criteria.length,
             },
-            requestId,
+            requestId: requestId ?? null,
           },
         ],
       });
@@ -86,7 +86,7 @@ export class RubricsService {
           entityId: version.id,
           action: AuditAction.RUBRIC_VERSION_CREATED,
           after: { rubricId, version: version.version, criteriaCount: criteria.length },
-          requestId,
+          requestId: requestId ?? null,
         },
       });
       return version;

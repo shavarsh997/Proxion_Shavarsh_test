@@ -1,8 +1,16 @@
 import { ConflictException } from '@nestjs/common';
 import { Role, TaskStatus } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
+import type { PrismaService } from '../src/database/prisma.service';
+import { TaskAccessPolicy } from '../src/modules/tasks/task-access.policy';
 import { TaskWorkflowService } from '../src/modules/tasks/task-workflow.service';
 
-const workflow = () => new TaskWorkflowService({ assertCanTransition: jest.fn() } as any);
+const workflow = () =>
+  new TaskWorkflowService(new TaskAccessPolicy({} as unknown as PrismaService));
+
+function transactionClient(transaction: unknown): Prisma.TransactionClient {
+  return transaction as Prisma.TransactionClient;
+}
 
 describe('TaskWorkflowService', () => {
   const actor = {
@@ -11,7 +19,7 @@ describe('TaskWorkflowService', () => {
     role: Role.ADMIN,
   };
   it('rejects an invalid ASSIGNED -> APPROVED transition', async () => {
-    const tx: any = {
+    const tx = {
       task: {
         findUnique: jest
           .fn()
@@ -20,14 +28,14 @@ describe('TaskWorkflowService', () => {
       assignment: { findFirst: jest.fn().mockResolvedValue({ id: 'assignment' }) },
     };
     await expect(
-      workflow().transition(tx, actor, 'task', TaskStatus.APPROVED),
+      workflow().transition(transactionClient(tx), actor, 'task', TaskStatus.APPROVED),
     ).rejects.toBeInstanceOf(ConflictException);
-    expect(tx.task.updateMany).toBeUndefined();
+    expect('updateMany' in tx.task).toBe(false);
   });
 
   it('changes state and records an audit event in the supplied transaction', async () => {
     const transitioned = { id: 'task', status: TaskStatus.IN_PROGRESS, version: 1 };
-    const tx: any = {
+    const tx = {
       task: {
         findUnique: jest
           .fn()
@@ -40,7 +48,13 @@ describe('TaskWorkflowService', () => {
     };
 
     await expect(
-      workflow().transition(tx, actor, 'task', TaskStatus.IN_PROGRESS, 'request-1'),
+      workflow().transition(
+        transactionClient(tx),
+        actor,
+        'task',
+        TaskStatus.IN_PROGRESS,
+        'request-1',
+      ),
     ).resolves.toEqual(transitioned);
     expect(tx.task.updateMany).toHaveBeenCalledWith({
       where: { id: 'task', version: 0 },
@@ -52,7 +66,7 @@ describe('TaskWorkflowService', () => {
   });
 
   it('rejects a stale optimistic-lock update', async () => {
-    const tx: any = {
+    const tx = {
       task: {
         findUnique: jest
           .fn()
@@ -62,7 +76,7 @@ describe('TaskWorkflowService', () => {
     };
 
     await expect(
-      workflow().transition(tx, actor, 'task', TaskStatus.IN_PROGRESS),
+      workflow().transition(transactionClient(tx), actor, 'task', TaskStatus.IN_PROGRESS),
     ).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'CONCURRENT_MODIFICATION' }),
     });

@@ -24,7 +24,7 @@ export class ProjectsService {
           entityId: project.id,
           action: AuditAction.PROJECT_CREATED,
           after: { name: project.name },
-          requestId,
+          requestId: requestId ?? null,
         },
       });
       return project;

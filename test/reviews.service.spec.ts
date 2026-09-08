@@ -1,8 +1,12 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ReviewDecision, ReviewStatus, Role, SubmissionStatus, TaskStatus } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { ReviewNotEditableException } from '../src/common/exceptions/domain.exceptions';
+import type { PrismaService } from '../src/database/prisma.service';
 import { ReviewAccessPolicy } from '../src/modules/reviews/review-access.policy';
 import { ReviewsService } from '../src/modules/reviews/reviews.service';
+import type { TaskWorkflowService } from '../src/modules/tasks/task-workflow.service';
+import type { UsersService } from '../src/modules/users/users.service';
 
 const reviewer = { id: 'reviewer', email: 'reviewer@test.local', role: Role.REVIEWER };
 const review = {
@@ -16,18 +20,29 @@ const review = {
   completedAt: null,
 };
 
-function scoreService(tx: any) {
+function transactionClient(transaction: unknown): Prisma.TransactionClient {
+  return transaction as Prisma.TransactionClient;
+}
+
+function transactionalPrisma(transaction: unknown): PrismaService {
+  return {
+    $transaction: (callback: (client: Prisma.TransactionClient) => Promise<unknown>) =>
+      callback(transactionClient(transaction)),
+  } as unknown as PrismaService;
+}
+
+function scoreService(transaction: unknown) {
   return new ReviewsService(
-    { $transaction: (callback: any) => callback(tx) } as any,
-    {} as any,
-    {} as any,
+    transactionalPrisma(transaction),
+    {} as unknown as TaskWorkflowService,
+    {} as unknown as UsersService,
     new ReviewAccessPolicy(),
   );
 }
 
 describe('review scoring invariants', () => {
   it('rejects scoring a review assigned to another reviewer', async () => {
-    const tx: any = {
+    const tx = {
       $executeRaw: jest.fn(),
       review: { findUnique: jest.fn().mockResolvedValue({ ...review, reviewerId: 'other' }) },
     };
@@ -37,7 +52,7 @@ describe('review scoring invariants', () => {
   });
 
   it('rejects a criterion pinned to another rubric version', async () => {
-    const tx: any = {
+    const tx = {
       $executeRaw: jest.fn(),
       review: { findUnique: jest.fn().mockResolvedValue(review) },
       rubricCriterion: {
@@ -50,7 +65,7 @@ describe('review scoring invariants', () => {
   });
 
   it('rejects scores outside the criterion range', async () => {
-    const tx: any = {
+    const tx = {
       $executeRaw: jest.fn(),
       review: { findUnique: jest.fn().mockResolvedValue(review) },
       rubricCriterion: {
@@ -65,7 +80,7 @@ describe('review scoring invariants', () => {
   });
 
   it('pins a created review to the requested immutable rubric version', async () => {
-    const tx: any = {
+    const tx = {
       $executeRaw: jest.fn(),
       submission: {
         findUnique: jest.fn().mockResolvedValue({
@@ -87,9 +102,9 @@ describe('review scoring invariants', () => {
     };
     const workflow = { transition: jest.fn().mockResolvedValue({ status: TaskStatus.IN_REVIEW }) };
     const service = new ReviewsService(
-      { $transaction: (callback: any) => callback(tx) } as any,
-      workflow as any,
-      { findByIdWithRole: jest.fn().mockResolvedValue(reviewer) } as any,
+      transactionalPrisma(tx),
+      workflow as unknown as TaskWorkflowService,
+      { findByIdWithRole: jest.fn().mockResolvedValue(reviewer) } as unknown as UsersService,
       new ReviewAccessPolicy(),
     );
 
@@ -105,7 +120,7 @@ describe('review scoring invariants', () => {
       score: 3,
       comment: 'Needs clarification',
     };
-    const tx: any = {
+    const tx = {
       $executeRaw: jest.fn(),
       review: { findUnique: jest.fn().mockResolvedValue(review) },
       rubricCriterion: {
@@ -153,14 +168,14 @@ describe('review scoring invariants', () => {
         },
       ],
     };
-    const tx: any = {
+    const tx = {
       $executeRaw: jest.fn(),
       review: { findUnique: jest.fn().mockResolvedValue(decisionReview) },
     };
     const service = new ReviewsService(
-      { $transaction: (callback: any) => callback(tx) } as any,
-      { transition: jest.fn() } as any,
-      {} as any,
+      transactionalPrisma(tx),
+      { transition: jest.fn() } as unknown as TaskWorkflowService,
+      {} as unknown as UsersService,
       new ReviewAccessPolicy(),
     );
 
@@ -190,7 +205,7 @@ describe('review scoring invariants', () => {
       decision: ReviewDecision.APPROVED,
       completedAt: new Date(),
     };
-    const tx: any = {
+    const tx = {
       $executeRaw: jest.fn(),
       review: {
         findUnique: jest.fn().mockResolvedValue(decisionReview),
@@ -201,9 +216,9 @@ describe('review scoring invariants', () => {
     };
     const workflow = { transition: jest.fn().mockResolvedValue({ status: TaskStatus.APPROVED }) };
     const service = new ReviewsService(
-      { $transaction: (callback: any) => callback(tx) } as any,
-      workflow as any,
-      {} as any,
+      transactionalPrisma(tx),
+      workflow as unknown as TaskWorkflowService,
+      {} as unknown as UsersService,
       new ReviewAccessPolicy(),
     );
 
@@ -231,7 +246,7 @@ describe('review scoring invariants', () => {
   });
 
   it('rejects score changes once a review is completed', async () => {
-    const tx: any = {
+    const tx = {
       $executeRaw: jest.fn(),
       review: {
         findUnique: jest.fn().mockResolvedValue({ ...review, status: ReviewStatus.COMPLETED }),

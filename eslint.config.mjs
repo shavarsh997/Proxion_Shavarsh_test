@@ -39,7 +39,8 @@ export default tseslint.config(
   {
     files: ['test/**/*.ts'],
     rules: {
-      '@typescript-eslint/no-explicit-any': 'off',
+      // Jest and SuperTest expose mock arguments and response bodies as `any`.
+      // Explicit `any` remains forbidden; test doubles cross the boundary via `unknown` casts.
       '@typescript-eslint/no-unsafe-assignment': 'off',
       '@typescript-eslint/no-unsafe-call': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',

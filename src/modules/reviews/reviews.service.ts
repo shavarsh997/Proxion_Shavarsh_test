@@ -92,7 +92,7 @@ export class ReviewsService {
           entityId: review.id,
           action: AuditAction.REVIEW_CREATED,
           after: { submissionId, reviewerId, rubricVersionId, status: review.status },
-          requestId,
+          requestId: requestId ?? null,
         },
       });
       return review;
@@ -167,10 +167,15 @@ export class ReviewsService {
       const savedScore = previousScore
         ? await tx.reviewScore.update({
             where: { id: previousScore.id },
-            data: { score: value, comment },
+            data: { score: value, comment: comment ?? null },
           })
         : await tx.reviewScore.create({
-            data: { reviewId, rubricCriterionId: criterionId, score: value, comment },
+            data: {
+              reviewId,
+              rubricCriterionId: criterionId,
+              score: value,
+              comment: comment ?? null,
+            },
           });
 
       await tx.auditLog.create({
@@ -185,7 +190,7 @@ export class ReviewsService {
             ? { score: Number(previousScore.score), comment: previousScore.comment }
             : Prisma.JsonNull,
           after: { score: Number(savedScore.score), comment: savedScore.comment },
-          requestId,
+          requestId: requestId ?? null,
         },
       });
       return savedScore;
@@ -254,7 +259,7 @@ export class ReviewsService {
             decision: completedReview.decision,
             completedAt: completedReview.completedAt,
           },
-          requestId,
+          requestId: requestId ?? null,
         },
       });
       return completedReview;
