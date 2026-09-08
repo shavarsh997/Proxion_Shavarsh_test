@@ -15,7 +15,6 @@ import { TaskWorkflowService } from './task-workflow.service';
 const taskDetails = {
   project: true,
   assignments: true,
-  submissions: { orderBy: { version: 'desc' as const } },
 };
 
 @Injectable()
@@ -55,7 +54,7 @@ export class TasksService {
     const [data, total] = await this.prisma.$transaction([
       this.prisma.task.findMany({
         where,
-        include: taskDetails,
+        include: this.taskDetailsFor(actor),
         orderBy: { updatedAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
@@ -75,6 +74,7 @@ export class TasksService {
 
     return this.prisma.$transaction(async (transaction) => {
       await transaction.$executeRaw`SELECT 1 FROM "Task" WHERE id = ${task.id}::uuid FOR UPDATE`;
+      const lockedTask = await transaction.task.findUniqueOrThrow({ where: { id: task.id } });
       const existing = await transaction.assignment.findUnique({
         where: { taskId_expertId: { taskId: task.id, expertId } },
       });
@@ -92,12 +92,18 @@ export class TasksService {
           requestId,
         },
       });
+      if (lockedTask.status === TaskStatus.UNASSIGNED) {
+        await this.workflow.transition(transaction, actor, task.id, TaskStatus.ASSIGNED, requestId);
+      }
       return assignment;
     });
   }
 
   async get(actor: AuthenticatedUser, taskId: string) {
-    const task = await this.prisma.task.findUnique({ where: { id: taskId }, include: taskDetails });
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      include: this.taskDetailsFor(actor),
+    });
     if (!task) {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Task not found' });
     }
@@ -156,6 +162,22 @@ export class TasksService {
       return { assignments: { some: { expertId: actor.id } } };
     }
     return { submissions: { some: { reviews: { some: { reviewerId: actor.id } } } } };
+  }
+
+  private taskDetailsFor(actor: AuthenticatedUser) {
+    return {
+      ...taskDetails,
+      submissions: {
+        where: this.submissionVisibilityFor(actor),
+        orderBy: { version: 'desc' as const },
+      },
+    };
+  }
+
+  private submissionVisibilityFor(actor: AuthenticatedUser): Prisma.SubmissionWhereInput {
+    if (actor.role === Role.ADMIN) return {};
+    if (actor.role === Role.EXPERT) return { expertId: actor.id };
+    return { reviews: { some: { reviewerId: actor.id } } };
   }
 
   private findVisibleReviews(actor: AuthenticatedUser, taskId: string) {

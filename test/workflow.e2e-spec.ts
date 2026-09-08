@@ -2,6 +2,10 @@ import * as request from 'supertest';
 
 const baseUrl = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:3000';
 const password = 'Password123!';
+const expertAId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const expertBId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const reviewerAId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const reviewerBId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 
 type Session = { accessToken: string };
 type AuthenticatedApi = {
@@ -11,9 +15,19 @@ type AuthenticatedApi = {
   put(path: string): request.Test;
 };
 
-async function login(email: string): Promise<Session> {
-  const response = await request(baseUrl).post('/auth/login').send({ email, password }).expect(201);
-  return response.body as Session;
+const sessions = new Map<string, Promise<Session>>();
+
+function login(email: string): Promise<Session> {
+  const existing = sessions.get(email);
+  if (existing) return existing;
+
+  const session = request(baseUrl)
+    .post('/auth/login')
+    .send({ email, password })
+    .expect(201)
+    .then((response) => response.body as Session);
+  sessions.set(email, session);
+  return session;
 }
 
 function authenticatedApi(accessToken: string): AuthenticatedApi {
@@ -58,10 +72,7 @@ describe('core workflow (e2e)', () => {
       .post(`/projects/${project.body.id}/tasks`)
       .send({ title: 'Review this response', instructions: 'Use the rubric.' })
       .expect(201);
-    await adminApi
-      .post(`/tasks/${task.body.id}/assign`)
-      .send({ expertId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })
-      .expect(201);
+    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertAId }).expect(201);
     const rubric = await adminApi
       .post(`/projects/${project.body.id}/rubrics`)
       .send({
@@ -84,7 +95,7 @@ describe('core workflow (e2e)', () => {
       .expect(409);
     const firstReview = await adminApi
       .post(`/submissions/${v1.body.id}/reviews`)
-      .send({ reviewerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', rubricVersionId })
+      .send({ reviewerId: reviewerAId, rubricVersionId })
       .expect(201);
     await reviewerApi
       .put(`/reviews/${firstReview.body.id}/scores/${criterionId}`)
@@ -104,7 +115,7 @@ describe('core workflow (e2e)', () => {
     await expertApi.post(`/tasks/${task.body.id}/submit`).expect(201);
     const secondReview = await adminApi
       .post(`/submissions/${v2.body.id}/reviews`)
-      .send({ reviewerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', rubricVersionId })
+      .send({ reviewerId: reviewerAId, rubricVersionId })
       .expect(201);
     await reviewerApi
       .put(`/reviews/${secondReview.body.id}/scores/${criterionId}`)
@@ -145,7 +156,7 @@ describe('core workflow (e2e)', () => {
         entry.entityId === task.body.id &&
         ['TASK_STARTED', 'TASK_STATUS_CHANGED'].includes(entry.action),
     );
-    expect(taskTransitions).toHaveLength(8);
+    expect(taskTransitions).toHaveLength(9);
     expect(auditLog.body.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -173,10 +184,7 @@ describe('core workflow (e2e)', () => {
       .post(`/projects/${project.body.id}/tasks`)
       .send({ title: 'Concurrent workflow', instructions: 'Use the rubric.' })
       .expect(201);
-    await adminApi
-      .post(`/tasks/${task.body.id}/assign`)
-      .send({ expertId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })
-      .expect(201);
+    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertAId }).expect(201);
     const rubric = await adminApi
       .post(`/projects/${project.body.id}/rubrics`)
       .send({
@@ -216,10 +224,10 @@ describe('core workflow (e2e)', () => {
     const parallelReviews = await Promise.all([
       adminApi
         .post(`/submissions/${latestDraft.body.id}/reviews`)
-        .send({ reviewerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', rubricVersionId }),
+        .send({ reviewerId: reviewerAId, rubricVersionId }),
       adminApi
         .post(`/submissions/${latestDraft.body.id}/reviews`)
-        .send({ reviewerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', rubricVersionId }),
+        .send({ reviewerId: reviewerAId, rubricVersionId }),
     ]);
     expect(parallelReviews.map((response) => response.status)).toEqual([201, 201]);
     expect(new Set(parallelReviews.map((response) => response.body.id)).size).toBe(1);
@@ -234,5 +242,173 @@ describe('core workflow (e2e)', () => {
       reviewerApi.post(`/reviews/${review.body.id}/request-rework`),
     ]);
     expect(decisions.map((response) => response.status).sort()).toEqual([201, 409]);
+  });
+
+  it('requires a real assignment before work starts and does not leak submissions across experts', async () => {
+    const [admin, expertA, expertB] = await Promise.all([
+      login('admin@proxion.local'),
+      login('expert@proxion.local'),
+      login('expert-b@proxion.local'),
+    ]);
+    const suffix = `submission-access-${Date.now()}`;
+    const adminApi = authenticatedApi(admin.accessToken);
+    const expertAApi = authenticatedApi(expertA.accessToken);
+    const expertBApi = authenticatedApi(expertB.accessToken);
+    const project = await adminApi.post('/projects').send({ name: suffix }).expect(201);
+    const task = await adminApi
+      .post(`/projects/${project.body.id}/tasks`)
+      .send({ title: 'Shared expert task', instructions: 'Keep work private.' })
+      .expect(201);
+
+    expect(task.body.status).toBe('UNASSIGNED');
+    const unassignedStart = await expertAApi.post(`/tasks/${task.body.id}/start`).expect(403);
+    expect(unassignedStart.body).toMatchObject({
+      code: 'FORBIDDEN',
+      requestId: expect.any(String),
+    });
+    await expertAApi
+      .post(`/tasks/${task.body.id}/submissions`)
+      .send({ content: 'Unassigned work must be rejected' })
+      .expect(403);
+
+    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertAId }).expect(201);
+    await expertBApi.post(`/tasks/${task.body.id}/start`).expect(403);
+    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertBId }).expect(201);
+    await expertAApi.post(`/tasks/${task.body.id}/start`).expect(201);
+
+    const submissionA = await expertAApi
+      .post(`/tasks/${task.body.id}/submissions`)
+      .send({ content: 'Expert A private draft' })
+      .expect(201);
+    const submissionB = await expertBApi
+      .post(`/tasks/${task.body.id}/submissions`)
+      .send({ content: 'Expert B private draft' })
+      .expect(201);
+
+    await expertAApi.get(`/submissions/${submissionB.body.id}`).expect(403);
+    const visibleSubmissions = await expertAApi
+      .get(`/tasks/${task.body.id}/submissions`)
+      .expect(200);
+    expect(visibleSubmissions.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: submissionA.body.id })]),
+    );
+    expect(visibleSubmissions.body).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: submissionB.body.id })]),
+    );
+
+    const taskDetail = await expertAApi.get(`/tasks/${task.body.id}`).expect(200);
+    expect(taskDetail.body.submissions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: submissionA.body.id })]),
+    );
+    expect(taskDetail.body.submissions).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: submissionB.body.id })]),
+    );
+  });
+
+  it('limits a reviewer to submissions directly connected to that reviewer review', async () => {
+    const [admin, expertA, expertB, reviewerA] = await Promise.all([
+      login('admin@proxion.local'),
+      login('expert@proxion.local'),
+      login('expert-b@proxion.local'),
+      login('reviewer@proxion.local'),
+    ]);
+    const suffix = `reviewer-submission-access-${Date.now()}`;
+    const adminApi = authenticatedApi(admin.accessToken);
+    const expertAApi = authenticatedApi(expertA.accessToken);
+    const expertBApi = authenticatedApi(expertB.accessToken);
+    const reviewerAApi = authenticatedApi(reviewerA.accessToken);
+    const project = await adminApi.post('/projects').send({ name: suffix }).expect(201);
+    const task = await adminApi
+      .post(`/projects/${project.body.id}/tasks`)
+      .send({
+        title: 'Reviewer submission isolation',
+        instructions: 'Review only your assignment.',
+      })
+      .expect(201);
+    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertAId }).expect(201);
+    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertBId }).expect(201);
+    const rubric = await adminApi
+      .post(`/projects/${project.body.id}/rubrics`)
+      .send({
+        name: 'Reviewer isolation rubric',
+        criteria: [{ name: 'Accuracy', minScore: 0, maxScore: 5, weight: 1, position: 1 }],
+      })
+      .expect(201);
+    const rubricVersionId = rubric.body.versions[0].id as string;
+
+    await expertAApi.post(`/tasks/${task.body.id}/start`).expect(201);
+    const submissionA = await expertAApi
+      .post(`/tasks/${task.body.id}/submissions`)
+      .send({ content: 'Submission assigned to reviewer A' })
+      .expect(201);
+    await expertAApi.post(`/tasks/${task.body.id}/submit`).expect(201);
+    const reviewA = await adminApi
+      .post(`/submissions/${submissionA.body.id}/reviews`)
+      .send({ reviewerId: reviewerAId, rubricVersionId })
+      .expect(201);
+    await reviewerAApi.post(`/reviews/${reviewA.body.id}/request-rework`).expect(201);
+    await expertBApi.post(`/tasks/${task.body.id}/start`).expect(201);
+    const submissionB = await expertBApi
+      .post(`/tasks/${task.body.id}/submissions`)
+      .send({ content: 'Submission not assigned to reviewer A' })
+      .expect(201);
+
+    await reviewerAApi.get(`/submissions/${submissionA.body.id}`).expect(200);
+    await reviewerAApi.get(`/submissions/${submissionB.body.id}`).expect(403);
+    const visibleSubmissions = await reviewerAApi
+      .get(`/tasks/${task.body.id}/submissions`)
+      .expect(200);
+    expect(visibleSubmissions.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: submissionA.body.id })]),
+    );
+    expect(visibleSubmissions.body).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: submissionB.body.id })]),
+    );
+  });
+
+  it('rejects every review operation from a reviewer who does not own the review', async () => {
+    const [admin, expertA, reviewerA] = await Promise.all([
+      login('admin@proxion.local'),
+      login('expert@proxion.local'),
+      login('reviewer@proxion.local'),
+    ]);
+    const suffix = `review-access-${Date.now()}`;
+    const adminApi = authenticatedApi(admin.accessToken);
+    const expertAApi = authenticatedApi(expertA.accessToken);
+    const reviewerAApi = authenticatedApi(reviewerA.accessToken);
+    const project = await adminApi.post('/projects').send({ name: suffix }).expect(201);
+    const task = await adminApi
+      .post(`/projects/${project.body.id}/tasks`)
+      .send({ title: 'Reviewer ownership', instructions: 'Review ownership is strict.' })
+      .expect(201);
+    await adminApi.post(`/tasks/${task.body.id}/assign`).send({ expertId: expertAId }).expect(201);
+    const rubric = await adminApi
+      .post(`/projects/${project.body.id}/rubrics`)
+      .send({
+        name: 'Reviewer ownership rubric',
+        criteria: [{ name: 'Accuracy', minScore: 0, maxScore: 5, weight: 1, position: 1 }],
+      })
+      .expect(201);
+    const rubricVersionId = rubric.body.versions[0].id as string;
+    const criterionId = rubric.body.versions[0].criteria[0].id as string;
+
+    await expertAApi.post(`/tasks/${task.body.id}/start`).expect(201);
+    const submission = await expertAApi
+      .post(`/tasks/${task.body.id}/submissions`)
+      .send({ content: 'Reviewer B owns this review' })
+      .expect(201);
+    await expertAApi.post(`/tasks/${task.body.id}/submit`).expect(201);
+    const reviewB = await adminApi
+      .post(`/submissions/${submission.body.id}/reviews`)
+      .send({ reviewerId: reviewerBId, rubricVersionId })
+      .expect(201);
+
+    await reviewerAApi.get(`/reviews/${reviewB.body.id}`).expect(403);
+    await reviewerAApi
+      .put(`/reviews/${reviewB.body.id}/scores/${criterionId}`)
+      .send({ score: 5 })
+      .expect(403);
+    await reviewerAApi.post(`/reviews/${reviewB.body.id}/approve`).expect(403);
+    await reviewerAApi.post(`/reviews/${reviewB.body.id}/request-rework`).expect(403);
   });
 });

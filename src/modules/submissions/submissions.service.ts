@@ -52,7 +52,10 @@ export class SubmissionsService {
 
   async list(actor: AuthenticatedUser, taskId: string) {
     await this.taskAccess.assertCanRead(actor, taskId);
-    return this.prisma.submission.findMany({ where: { taskId }, orderBy: { version: 'asc' } });
+    return this.prisma.submission.findMany({
+      where: { taskId, ...this.submissionVisibilityFor(actor) },
+      orderBy: { version: 'asc' },
+    });
   }
 
   async updateDraft(
@@ -118,12 +121,14 @@ export class SubmissionsService {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Submission not found' });
     }
 
-    await this.taskAccess.assertCanRead(
-      actor,
-      submission.taskId,
-      submission.task.assignments.map((assignment) => assignment.expertId),
-    );
+    await this.taskAccess.assertCanReadSubmission(actor, submission);
     return submission;
+  }
+
+  private submissionVisibilityFor(actor: AuthenticatedUser): Prisma.SubmissionWhereInput {
+    if (actor.role === Role.ADMIN) return {};
+    if (actor.role === Role.EXPERT) return { expertId: actor.id };
+    return { reviews: { some: { reviewerId: actor.id } } };
   }
 
   private async assertExpertCanCreateSubmission(

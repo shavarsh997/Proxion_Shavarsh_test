@@ -20,6 +20,23 @@ export class TaskAccessPolicy {
     throw new ResourceForbiddenException('Resource is not assigned to you');
   }
 
+  async assertCanReadSubmission(
+    actor: AuthenticatedUser,
+    submission: { id: string; expertId: string },
+  ) {
+    if (actor.role === Role.ADMIN) return;
+    if (actor.role === Role.EXPERT && submission.expertId === actor.id) return;
+    if (
+      actor.role === Role.REVIEWER &&
+      (await this.prisma.review.findFirst({
+        where: { submissionId: submission.id, reviewerId: actor.id },
+      }))
+    ) {
+      return;
+    }
+    throw new ResourceForbiddenException('Submission is not assigned to you');
+  }
+
   async assertCanTransition(
     transaction: Prisma.TransactionClient,
     actor: AuthenticatedUser,

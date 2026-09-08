@@ -9,6 +9,7 @@ import { TaskAccessPolicy } from './task-access.policy';
 
 // This is the sole task-state transition map. Task.status is not mutated elsewhere.
 const ALLOWED_TASK_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
+  UNASSIGNED: [TaskStatus.ASSIGNED],
   ASSIGNED: [TaskStatus.IN_PROGRESS],
   IN_PROGRESS: [TaskStatus.SUBMITTED],
   SUBMITTED: [TaskStatus.IN_REVIEW],

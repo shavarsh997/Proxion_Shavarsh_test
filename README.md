@@ -103,21 +103,24 @@ Each domain module keeps its controller, service, module declaration, policy whe
 | --- | --- |
 | `JwtAuthGuard` | Validates the Bearer token, reloads the active user and current role from PostgreSQL, and attaches that user to `request.user`. |
 | `RolesGuard` | Performs coarse role authorization for `ADMIN`, `EXPERT`, and `REVIEWER`. |
-| `TaskAccessPolicy` / `ReviewAccessPolicy` | Performs resource-level authorization from assignments and review ownership. |
+| `TaskAccessPolicy` / `ReviewAccessPolicy` | Performs resource-level authorization from assignments, submission ownership, and review ownership. |
 
 Controllers remain thin: they provide routing, DTO parsing, Swagger metadata, and authenticated-user extraction. Services and policies contain business rules and resource checks.
 
 | Role | Capabilities |
 | --- | --- |
 | ADMIN | Creates projects, tasks, assignments, rubrics, and reviews; reads audit records. |
-| EXPERT | Reads assigned tasks and creates or edits their draft submissions. |
-| REVIEWER | Reads assigned reviews, records scores, requests rework, and approves reviewed work. |
+| EXPERT | Reads assigned tasks and only their own submissions; creates or edits only their draft submissions. |
+| REVIEWER | Reads submissions only when directly assigned through a Review; records scores, requests rework, and approves only their own reviews. |
 
 ## Task workflow
 
 [`TaskWorkflowService`](src/modules/tasks/task-workflow.service.ts) is the only application-level authority allowed to change `Task.status`. Its transition map is centralized and uses optimistic locking.
 
 ```text
+UNASSIGNED
+   |
+   v
 ASSIGNED
    |
    v
@@ -139,6 +142,7 @@ IN_PROGRESS
 Allowed transitions are:
 
 ```text
+UNASSIGNED -> ASSIGNED (first valid expert assignment)
 ASSIGNED -> IN_PROGRESS
 IN_PROGRESS -> SUBMITTED
 SUBMITTED -> IN_REVIEW
@@ -147,6 +151,8 @@ IN_REVIEW -> APPROVED
 REWORK -> IN_PROGRESS
 APPROVED -> terminal
 ```
+
+`UNASSIGNED` is a creation-only staging state required by the existing two-step API (`POST /projects/:projectId/tasks`, then `POST /tasks/:id/assign`). The first valid expert assignment, its assignment audit entry, and the `UNASSIGNED -> ASSIGNED` transition happen in one transaction. The Work Sample workflow starts at `ASSIGNED`; an expert cannot start or create a submission until that expert has a real Assignment.
 
 There is no `REWORK -> APPROVED` transition. After rework, the expert creates and submits a new Submission version; an admin starts a new review cycle; only that review cycle can lead to approval.
 
@@ -170,7 +176,7 @@ The repository deliberately uses two complementary concurrency mechanisms:
 - **Optimistic locking** protects normal Task state transitions with `UPDATE ... WHERE id = taskId AND version = expectedVersion`. A stale request receives `409 CONCURRENT_MODIFICATION` without holding a database lock while the request is processed.
 - **Row-level locking** (`SELECT ... FOR UPDATE`) is reserved for short critical sections that allocate the next monotonically increasing `Submission.version` or `RubricVersion.version`, submission finalization/draft updates, review scoring/decisions, and idempotent assignment creation.
 
-`Assignment` is unique by `(taskId, expertId)`. Repeating the same assignment returns the existing assignment without an extra audit event. Concurrent repeated submit or review-decision requests produce one committed transition; the other request receives a controlled `409` rather than creating duplicate business history.
+`Assignment` is unique by `(taskId, expertId)`, so this backend intentionally permits several experts on one Task while preventing duplicate assignments for the same expert. Submission visibility remains ownership-specific: an expert sees only submissions they authored, and a reviewer sees only submissions directly connected to their own Reviews. Repeating the same assignment returns the existing assignment without an extra audit event. Concurrent repeated submit or review-decision requests produce one committed transition; the other request receives a controlled `409` rather than creating duplicate business history.
 
 ## Versioning and historical data
 
@@ -265,7 +271,7 @@ npm run test:e2e
 
 It covers login, project/task/rubric setup, assignment, v1 submission, scoring, rework, v2 submission, re-scoring, approval, immutable v1, exact rubric references, audit score history, and final Task status. The test suite also exercises incomplete-review rejection, completed-review score immutability, resource access boundaries, and parallel submission/rubric-version/review/decision requests.
 
-`dev-client/` is an optional API exerciser. The root TypeScript, ESLint, Jest, Docker, build, and runtime configurations do not depend on it, so it can be removed without affecting the backend.
+`dev-client/` is an optional local developer testing utility. It is not part of the backend runtime and is not required to run or evaluate the API. The root TypeScript, ESLint, Jest, Docker, build, and runtime configurations do not depend on it.
 
 ## Scope and scaling limits
 

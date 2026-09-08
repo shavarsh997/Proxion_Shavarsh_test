@@ -14,6 +14,7 @@ enum Role {
 }
 
 enum TaskStatus {
+  UNASSIGNED
   ASSIGNED
   IN_PROGRESS
   SUBMITTED
@@ -71,7 +72,7 @@ model Task {
   projectId    String       @db.Uuid
   title        String
   instructions String
-  status       TaskStatus   @default(ASSIGNED)
+  status       TaskStatus   @default(UNASSIGNED)
   version      Int          @default(0)
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt

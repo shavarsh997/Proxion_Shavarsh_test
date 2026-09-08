@@ -3,7 +3,7 @@ import * as bcrypt from 'bcrypt';
 const prisma = new PrismaClient();
 async function main() {
   const passwordHash = await bcrypt.hash('Password123!', 12);
-  const [admin, expert, reviewer] = await Promise.all([
+  const [admin, expertB, expert, reviewerB, reviewer] = await Promise.all([
     prisma.user.upsert({
       where: { email: 'admin@proxion.local' },
       update: {},
@@ -15,6 +15,16 @@ async function main() {
       },
     }),
     prisma.user.upsert({
+      where: { email: 'expert-b@proxion.local' },
+      update: {},
+      create: {
+        id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        email: 'expert-b@proxion.local',
+        passwordHash,
+        role: Role.EXPERT,
+      },
+    }),
+    prisma.user.upsert({
       where: { email: 'expert@proxion.local' },
       update: {},
       create: {
@@ -22,6 +32,16 @@ async function main() {
         email: 'expert@proxion.local',
         passwordHash,
         role: Role.EXPERT,
+      },
+    }),
+    prisma.user.upsert({
+      where: { email: 'reviewer-b@proxion.local' },
+      update: {},
+      create: {
+        id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        email: 'reviewer-b@proxion.local',
+        passwordHash,
+        role: Role.REVIEWER,
       },
     }),
     prisma.user.upsert({
@@ -102,7 +122,9 @@ async function main() {
   console.log({
     admin: admin.email,
     expert: expert.email,
+    expertB: expertB.email,
     reviewer: reviewer.email,
+    reviewerB: reviewerB.email,
     projectId: project.id,
     taskId: task.id,
     rubricId: rubric.id,
