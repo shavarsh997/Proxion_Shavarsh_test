@@ -19,6 +19,7 @@ describe('immutable submission versions', () => {
         findUnique: jest.fn().mockResolvedValue({ id: 'task', status: TaskStatus.IN_PROGRESS }),
       },
       assignment: { findFirst: jest.fn().mockResolvedValue({ id: 'a' }) },
+      auditLog: { create: jest.fn() },
       submission: {
         findFirst: jest.fn(async () => records[records.length - 1]),
         create: jest.fn(async ({ data }: any) => {

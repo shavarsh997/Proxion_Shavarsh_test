@@ -6,4 +6,5 @@ export const environmentValidationSchema = Joi.object({
   PORT: Joi.number().default(3000),
   CORS_ORIGINS: Joi.string().default('http://localhost:5173'),
   SEED_ON_START: Joi.string().valid('true', 'false').default('false'),
+  TRUST_PROXY: Joi.string().valid('true', 'false').default('false'),
 });

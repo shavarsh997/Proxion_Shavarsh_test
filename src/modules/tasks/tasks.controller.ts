@@ -29,10 +29,12 @@ export class TasksController {
   constructor(private readonly tasks: TasksService) {}
 
   @Post('projects/:projectId/tasks') @Roles(Role.ADMIN) create(
+    @CurrentUser() actor: AuthenticatedUser,
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Body() dto: CreateTaskDto,
+    @RequestId() requestId: string,
   ) {
-    return this.tasks.create(projectId, dto);
+    return this.tasks.create(actor, projectId, dto, requestId);
   }
 
   @Get('tasks') list(@CurrentUser() actor: AuthenticatedUser, @Query() query: PaginationDto) {
@@ -50,8 +52,9 @@ export class TasksController {
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignTaskDto,
+    @RequestId() requestId: string,
   ) {
-    return this.tasks.assign(actor, id, dto.expertId);
+    return this.tasks.assign(actor, id, dto.expertId, requestId);
   }
 
   @Post('tasks/:id/start') @Roles(Role.EXPERT) start(
@@ -68,21 +71,5 @@ export class TasksController {
     @RequestId() requestId: string,
   ) {
     return this.tasks.transition(actor, id, TaskStatus.SUBMITTED, requestId);
-  }
-
-  @Post('tasks/:id/request-rework') @Roles(Role.REVIEWER) rework(
-    @CurrentUser() actor: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
-    @RequestId() requestId: string,
-  ) {
-    return this.tasks.transition(actor, id, TaskStatus.REWORK, requestId);
-  }
-
-  @Post('tasks/:id/approve') @Roles(Role.REVIEWER) approve(
-    @CurrentUser() actor: AuthenticatedUser,
-    @Param('id', ParseUUIDPipe) id: string,
-    @RequestId() requestId: string,
-  ) {
-    return this.tasks.transition(actor, id, TaskStatus.APPROVED, requestId);
   }
 }

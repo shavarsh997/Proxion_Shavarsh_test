@@ -29,6 +29,11 @@ enum ReviewStatus {
   APPROVED
 }
 
+enum ReviewDecision {
+  APPROVED
+  REWORK_REQUESTED
+}
+
 enum SubmissionStatus {
   DRAFT
   SUBMITTED
@@ -39,6 +44,7 @@ model User {
   email               String       @unique
   passwordHash        String
   role                Role
+  isActive            Boolean      @default(true)
   createdAt           DateTime     @default(now())
   projects            Project[]    @relation("ProjectCreator")
   assignedAssignments Assignment[] @relation("AssignedExpert")
@@ -88,6 +94,7 @@ model Assignment {
 
   @@index([expertId, taskId])
   @@index([taskId])
+  @@unique([taskId, expertId])
 }
 
 model Submission {
@@ -151,6 +158,7 @@ model Review {
   reviewerId      String        @db.Uuid
   rubricVersionId String        @db.Uuid
   status          ReviewStatus  @default(OPEN)
+  decision        ReviewDecision?
   createdAt       DateTime      @default(now())
   completedAt     DateTime?
   submission      Submission    @relation(fields: [submissionId], references: [id])

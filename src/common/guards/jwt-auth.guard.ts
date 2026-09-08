@@ -2,14 +2,18 @@ import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from
 import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
 import type { AuthenticatedUser } from '../interfaces/authenticated-user.interface';
+import { PrismaService } from '../../database/prisma.service';
 
 type AuthenticatedRequest = Request & { user?: AuthenticatedUser };
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  constructor(private readonly jwt: JwtService) {}
+  constructor(
+    private readonly jwt: JwtService,
+    private readonly prisma: PrismaService,
+  ) {}
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const authorization = request.headers.authorization;
 
@@ -21,7 +25,14 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
-      request.user = this.jwt.verify<AuthenticatedUser>(authorization.slice(7));
+      const tokenUser = this.jwt.verify<AuthenticatedUser>(authorization.slice(7));
+      const user = await this.prisma.user.findFirst({
+        where: { id: tokenUser.id, isActive: true },
+        select: { id: true, email: true, role: true },
+      });
+      if (!user) throw new Error('Inactive or deleted user');
+      // Reloading the user makes deactivation and role changes effective immediately.
+      request.user = user;
       return true;
     } catch {
       throw new UnauthorizedException({

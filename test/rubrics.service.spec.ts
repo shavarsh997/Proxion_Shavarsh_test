@@ -1,5 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
 import { RubricsService } from '../src/modules/rubrics/rubrics.service';
+import { Role } from '@prisma/client';
+
+const admin = { id: 'admin', email: 'admin@test.local', role: Role.ADMIN };
 
 const criterion = {
   name: 'Accuracy',
@@ -14,7 +17,7 @@ describe('rubric criteria invariants', () => {
     const service = new RubricsService({} as any);
 
     await expect(
-      service.create('project', 'Quality', [{ ...criterion, minScore: 6, maxScore: 5 }]),
+      service.create(admin, 'project', 'Quality', [{ ...criterion, minScore: 6, maxScore: 5 }]),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -22,7 +25,7 @@ describe('rubric criteria invariants', () => {
     const service = new RubricsService({} as any);
 
     await expect(
-      service.version('rubric', [criterion, { ...criterion, name: 'Clarity' }]),
+      service.version(admin, 'rubric', [criterion, { ...criterion, name: 'Clarity' }]),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

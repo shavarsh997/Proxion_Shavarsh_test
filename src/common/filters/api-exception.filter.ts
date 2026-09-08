@@ -3,6 +3,7 @@ import {
   type ArgumentsHost,
   HttpException,
   HttpStatus,
+  Logger,
   type ExceptionFilter,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -10,6 +11,7 @@ import type { Response } from 'express';
 import type { RequestWithContext } from '../interfaces/request-with-context.interface';
 
 type ErrorBody = { code?: string; message?: string | string[] };
+const logger = new Logger('ApiExceptionFilter');
 
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
@@ -18,6 +20,16 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const request = context.getRequest<RequestWithContext>();
     const response = context.getResponse<Response>();
     const { statusCode, code, message } = this.describe(exception);
+    const isServerError = statusCode >= 500;
+    const record = JSON.stringify({
+      level: isServerError ? 'error' : 'warn',
+      requestId: request.requestId,
+      userId: request.user?.id,
+      code,
+      statusCode,
+    });
+    if (isServerError) logger.error(record);
+    else logger.warn(record);
     response.status(statusCode).json({ statusCode, code, message, requestId: request.requestId });
   }
 

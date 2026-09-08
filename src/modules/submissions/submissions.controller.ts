@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { RequestId } from '../../common/decorators/request-id.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -30,16 +31,18 @@ export class SubmissionsController {
     @CurrentUser() actor: AuthenticatedUser,
     @Param('taskId', ParseUUIDPipe) taskId: string,
     @Body() dto: CreateSubmissionDto,
+    @RequestId() requestId: string,
   ) {
-    return this.submissions.create(actor, taskId, dto.content);
+    return this.submissions.create(actor, taskId, dto.content, requestId);
   }
 
   @Patch('submissions/:id') @Roles(Role.EXPERT) updateDraft(
     @CurrentUser() actor: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateSubmissionDto,
+    @RequestId() requestId: string,
   ) {
-    return this.submissions.updateDraft(actor, id, dto.content);
+    return this.submissions.updateDraft(actor, id, dto.content, requestId);
   }
 
   @Get('tasks/:taskId/submissions') list(

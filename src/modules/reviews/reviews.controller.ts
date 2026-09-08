@@ -9,7 +9,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { Role } from '@prisma/client';
+import { ReviewDecision, Role } from '@prisma/client';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequestId } from '../../common/decorators/request-id.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -57,5 +57,21 @@ export class ReviewsController {
     @RequestId() requestId: string,
   ) {
     return this.reviews.score(actor, reviewId, criterionId, dto.score, dto.comment, requestId);
+  }
+
+  @Post('reviews/:id/approve') @Roles(Role.REVIEWER) approve(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @RequestId() requestId: string,
+  ) {
+    return this.reviews.decide(actor, id, ReviewDecision.APPROVED, requestId);
+  }
+
+  @Post('reviews/:id/request-rework') @Roles(Role.REVIEWER) requestRework(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @RequestId() requestId: string,
+  ) {
+    return this.reviews.decide(actor, id, ReviewDecision.REWORK_REQUESTED, requestId);
   }
 }

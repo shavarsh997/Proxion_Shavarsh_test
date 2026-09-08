@@ -14,4 +14,8 @@ export class ReviewAccessPolicy {
     if (actor.role === Role.REVIEWER && review.reviewerId === actor.id) return;
     throw new ResourceForbiddenException('Review is not assigned to you');
   }
+
+  assertCanDecide(actor: AuthenticatedUser, review: Review) {
+    this.assertCanScore(actor, review);
+  }
 }

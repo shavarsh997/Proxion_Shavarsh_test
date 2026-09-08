@@ -12,7 +12,7 @@ export class AuthService {
 
   async login(email: string, password: string) {
     const user = await this.users.findByEmail(email);
-    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+    if (!user || !user.isActive || !(await bcrypt.compare(password, user.passwordHash))) {
       throw new UnauthorizedException({
         code: 'INVALID_CREDENTIALS',
         message: 'Invalid email or password',

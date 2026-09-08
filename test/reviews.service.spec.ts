@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { ReviewStatus, Role, SubmissionStatus, TaskStatus } from '@prisma/client';
+import { ReviewDecision, ReviewStatus, Role, SubmissionStatus, TaskStatus } from '@prisma/client';
+import { ReviewNotEditableException } from '../src/common/exceptions/domain.exceptions';
 import { ReviewAccessPolicy } from '../src/modules/reviews/review-access.policy';
 import { ReviewsService } from '../src/modules/reviews/reviews.service';
 
@@ -10,6 +11,7 @@ const review = {
   rubricVersionId: 'rubric-v1',
   submissionId: 'submission',
   status: ReviewStatus.OPEN,
+  decision: null,
   createdAt: new Date(),
   completedAt: null,
 };
@@ -26,6 +28,7 @@ function scoreService(tx: any) {
 describe('review scoring invariants', () => {
   it('rejects scoring a review assigned to another reviewer', async () => {
     const tx: any = {
+      $executeRaw: jest.fn(),
       review: { findUnique: jest.fn().mockResolvedValue({ ...review, reviewerId: 'other' }) },
     };
     await expect(scoreService(tx).score(reviewer, 'review', 'criterion', 4)).rejects.toBeInstanceOf(
@@ -35,6 +38,7 @@ describe('review scoring invariants', () => {
 
   it('rejects a criterion pinned to another rubric version', async () => {
     const tx: any = {
+      $executeRaw: jest.fn(),
       review: { findUnique: jest.fn().mockResolvedValue(review) },
       rubricCriterion: {
         findUnique: jest.fn().mockResolvedValue({ rubricVersionId: 'rubric-v2' }),
@@ -47,6 +51,7 @@ describe('review scoring invariants', () => {
 
   it('rejects scores outside the criterion range', async () => {
     const tx: any = {
+      $executeRaw: jest.fn(),
       review: { findUnique: jest.fn().mockResolvedValue(review) },
       rubricCriterion: {
         findUnique: jest
@@ -61,6 +66,7 @@ describe('review scoring invariants', () => {
 
   it('pins a created review to the requested immutable rubric version', async () => {
     const tx: any = {
+      $executeRaw: jest.fn(),
       submission: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'submission',
@@ -74,7 +80,11 @@ describe('review scoring invariants', () => {
           .fn()
           .mockResolvedValue({ id: 'rubric-v1', rubric: { projectId: 'project' } }),
       },
-      review: { create: jest.fn().mockResolvedValue(review) },
+      review: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue(review),
+      },
+      auditLog: { create: jest.fn() },
     };
     const workflow = { transition: jest.fn().mockResolvedValue({ status: TaskStatus.IN_REVIEW }) };
     const service = new ReviewsService(
@@ -97,6 +107,7 @@ describe('review scoring invariants', () => {
       comment: 'Needs clarification',
     };
     const tx: any = {
+      $executeRaw: jest.fn(),
       review: { findUnique: jest.fn().mockResolvedValue(review) },
       rubricCriterion: {
         findUnique: jest
@@ -118,10 +129,109 @@ describe('review scoring invariants', () => {
 
     expect(tx.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        action: 'UPDATED',
+        action: 'REVIEW_SCORE_UPDATED',
         before: { score: 3, comment: 'Needs clarification' },
         after: { score: 4, comment: 'Improved reasoning' },
       }),
     });
+  });
+
+  it('rejects approval until every rubric criterion has a valid score', async () => {
+    const decisionReview = {
+      ...review,
+      submission: { taskId: 'task', task: { id: 'task' } },
+      rubricVersion: {
+        criteria: [
+          { id: 'criterion-1', minScore: 0, maxScore: 5 },
+          { id: 'criterion-2', minScore: 0, maxScore: 5 },
+        ],
+      },
+      scores: [
+        {
+          rubricCriterionId: 'criterion-1',
+          score: 5,
+          rubricCriterion: { rubricVersionId: 'rubric-v1' },
+        },
+      ],
+    };
+    const tx: any = {
+      $executeRaw: jest.fn(),
+      review: { findUnique: jest.fn().mockResolvedValue(decisionReview) },
+    };
+    const service = new ReviewsService(
+      { $transaction: (callback: any) => callback(tx) } as any,
+      { transition: jest.fn() } as any,
+      {} as any,
+      new ReviewAccessPolicy(),
+    );
+
+    await expect(service.decide(reviewer, 'review', ReviewDecision.APPROVED)).rejects.toMatchObject(
+      {
+        response: expect.objectContaining({ code: 'REVIEW_INCOMPLETE' }),
+      },
+    );
+  });
+
+  it('completes an approved review and delegates the task transition to the workflow', async () => {
+    const decisionReview = {
+      ...review,
+      submission: { taskId: 'task', task: { id: 'task' } },
+      rubricVersion: { criteria: [{ id: 'criterion-1', minScore: 0, maxScore: 5 }] },
+      scores: [
+        {
+          rubricCriterionId: 'criterion-1',
+          score: 5,
+          rubricCriterion: { rubricVersionId: 'rubric-v1' },
+        },
+      ],
+    };
+    const completed = {
+      ...review,
+      status: ReviewStatus.APPROVED,
+      decision: ReviewDecision.APPROVED,
+      completedAt: new Date(),
+    };
+    const tx: any = {
+      $executeRaw: jest.fn(),
+      review: {
+        findUnique: jest.fn().mockResolvedValue(decisionReview),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue(completed),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const workflow = { transition: jest.fn().mockResolvedValue({ status: TaskStatus.APPROVED }) };
+    const service = new ReviewsService(
+      { $transaction: (callback: any) => callback(tx) } as any,
+      workflow as any,
+      {} as any,
+      new ReviewAccessPolicy(),
+    );
+
+    await expect(service.decide(reviewer, 'review', ReviewDecision.APPROVED)).resolves.toEqual(
+      completed,
+    );
+    expect(workflow.transition).toHaveBeenCalledWith(
+      tx,
+      reviewer,
+      'task',
+      TaskStatus.APPROVED,
+      undefined,
+    );
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'REVIEW_APPROVED' }),
+    });
+  });
+
+  it('rejects score changes once a review is completed', async () => {
+    const tx: any = {
+      $executeRaw: jest.fn(),
+      review: {
+        findUnique: jest.fn().mockResolvedValue({ ...review, status: ReviewStatus.APPROVED }),
+      },
+    };
+    await expect(scoreService(tx).score(reviewer, 'review', 'criterion', 5)).rejects.toBeInstanceOf(
+      ReviewNotEditableException,
+    );
   });
 });

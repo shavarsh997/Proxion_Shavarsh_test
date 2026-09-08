@@ -94,7 +94,7 @@ describe('core workflow (e2e)', () => {
       .put(`/reviews/${firstReview.body.id}/scores/${criterionId}`)
       .send({ score: 4, comment: 'Improved reasoning' })
       .expect(200);
-    await reviewerApi.post(`/tasks/${task.body.id}/request-rework`).expect(201);
+    await reviewerApi.post(`/reviews/${firstReview.body.id}/request-rework`).expect(201);
 
     await expertApi.post(`/tasks/${task.body.id}/start`).expect(201);
     const v2 = await expertApi
@@ -110,7 +110,7 @@ describe('core workflow (e2e)', () => {
       .put(`/reviews/${secondReview.body.id}/scores/${criterionId}`)
       .send({ score: 5, comment: 'Ready to approve' })
       .expect(200);
-    await reviewerApi.post(`/tasks/${task.body.id}/approve`).expect(201);
+    await reviewerApi.post(`/reviews/${secondReview.body.id}/approve`).expect(201);
 
     const completedTask = await adminApi.get(`/tasks/${task.body.id}`).expect(200);
     expect(completedTask.body.status).toBe('APPROVED');
@@ -142,18 +142,97 @@ describe('core workflow (e2e)', () => {
     const auditLog = await adminApi.get('/audit-logs?limit=100').expect(200);
     const taskTransitions = auditLog.body.data.filter(
       (entry: { entityId: string; action: string }) =>
-        entry.entityId === task.body.id && entry.action === 'STATUS_CHANGED',
+        entry.entityId === task.body.id &&
+        ['TASK_STARTED', 'TASK_STATUS_CHANGED'].includes(entry.action),
     );
     expect(taskTransitions).toHaveLength(8);
     expect(auditLog.body.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           entityType: 'ReviewScore',
-          action: 'UPDATED',
+          action: 'REVIEW_SCORE_UPDATED',
           before: { score: 3, comment: 'Needs clarification' },
           after: { score: 4, comment: 'Improved reasoning' },
         }),
       ]),
     );
+  });
+
+  it('serializes parallel submission, rubric-version, review, and decision mutations', async () => {
+    const [admin, expert, reviewer] = await Promise.all([
+      login('admin@proxion.local'),
+      login('expert@proxion.local'),
+      login('reviewer@proxion.local'),
+    ]);
+    const suffix = `concurrency-${Date.now()}`;
+    const adminApi = authenticatedApi(admin.accessToken);
+    const expertApi = authenticatedApi(expert.accessToken);
+    const reviewerApi = authenticatedApi(reviewer.accessToken);
+    const project = await adminApi.post('/projects').send({ name: suffix }).expect(201);
+    const task = await adminApi
+      .post(`/projects/${project.body.id}/tasks`)
+      .send({ title: 'Concurrent workflow', instructions: 'Use the rubric.' })
+      .expect(201);
+    await adminApi
+      .post(`/tasks/${task.body.id}/assign`)
+      .send({ expertId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })
+      .expect(201);
+    const rubric = await adminApi
+      .post(`/projects/${project.body.id}/rubrics`)
+      .send({
+        name: 'Concurrent quality',
+        criteria: [{ name: 'Accuracy', minScore: 0, maxScore: 5, weight: 1, position: 1 }],
+      })
+      .expect(201);
+    const rubricVersionId = rubric.body.versions[0].id as string;
+    const criterionId = rubric.body.versions[0].criteria[0].id as string;
+
+    const parallelVersions = await Promise.all([
+      adminApi.post(`/rubrics/${rubric.body.id}/versions`).send({
+        criteria: [{ name: 'Accuracy', minScore: 0, maxScore: 5, weight: 1, position: 1 }],
+      }),
+      adminApi.post(`/rubrics/${rubric.body.id}/versions`).send({
+        criteria: [{ name: 'Accuracy', minScore: 0, maxScore: 5, weight: 1, position: 1 }],
+      }),
+    ]);
+    expect(parallelVersions.map((response) => response.status)).toEqual([201, 201]);
+    expect(new Set(parallelVersions.map((response) => response.body.version)).size).toBe(2);
+
+    await expertApi.post(`/tasks/${task.body.id}/start`).expect(201);
+    const parallelDrafts = await Promise.all([
+      expertApi.post(`/tasks/${task.body.id}/submissions`).send({ content: 'draft A' }),
+      expertApi.post(`/tasks/${task.body.id}/submissions`).send({ content: 'draft B' }),
+    ]);
+    expect(parallelDrafts.map((response) => response.status)).toEqual([201, 201]);
+    expect(new Set(parallelDrafts.map((response) => response.body.version)).size).toBe(2);
+
+    const latestDraft = parallelDrafts.sort((a, b) => b.body.version - a.body.version)[0];
+    const parallelSubmit = await Promise.all([
+      expertApi.post(`/tasks/${task.body.id}/submit`),
+      expertApi.post(`/tasks/${task.body.id}/submit`),
+    ]);
+    expect(parallelSubmit.map((response) => response.status).sort()).toEqual([201, 409]);
+
+    const parallelReviews = await Promise.all([
+      adminApi
+        .post(`/submissions/${latestDraft.body.id}/reviews`)
+        .send({ reviewerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', rubricVersionId }),
+      adminApi
+        .post(`/submissions/${latestDraft.body.id}/reviews`)
+        .send({ reviewerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', rubricVersionId }),
+    ]);
+    expect(parallelReviews.map((response) => response.status)).toEqual([201, 201]);
+    expect(new Set(parallelReviews.map((response) => response.body.id)).size).toBe(1);
+    const review = parallelReviews.find((response) => response.status === 201)!;
+    await reviewerApi
+      .put(`/reviews/${review.body.id}/scores/${criterionId}`)
+      .send({ score: 5 })
+      .expect(200);
+
+    const decisions = await Promise.all([
+      reviewerApi.post(`/reviews/${review.body.id}/approve`),
+      reviewerApi.post(`/reviews/${review.body.id}/request-rework`),
+    ]);
+    expect(decisions.map((response) => response.status).sort()).toEqual([201, 409]);
   });
 });

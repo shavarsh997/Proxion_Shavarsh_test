@@ -18,7 +18,7 @@ export class SubmissionsService {
     private readonly taskAccess: TaskAccessPolicy,
   ) {}
 
-  async create(actor: AuthenticatedUser, taskId: string, content: string) {
+  async create(actor: AuthenticatedUser, taskId: string, content: string, requestId?: string) {
     if (actor.role !== Role.EXPERT) {
       throw new ForbiddenException({
         code: 'FORBIDDEN',
@@ -33,9 +33,20 @@ export class SubmissionsService {
       await this.assertExpertCanCreateSubmission(transaction, actor, taskId);
       const nextVersion = await this.getNextVersion(transaction, taskId);
 
-      return transaction.submission.create({
+      const submission = await transaction.submission.create({
         data: { taskId, expertId: actor.id, version: nextVersion, content },
       });
+      await transaction.auditLog.create({
+        data: {
+          actorId: actor.id,
+          entityType: 'Submission',
+          entityId: submission.id,
+          action: 'SUBMISSION_CREATED',
+          after: { taskId, version: submission.version, status: submission.status },
+          requestId,
+        },
+      });
+      return submission;
     });
   }
 
@@ -44,7 +55,12 @@ export class SubmissionsService {
     return this.prisma.submission.findMany({ where: { taskId }, orderBy: { version: 'asc' } });
   }
 
-  async updateDraft(actor: AuthenticatedUser, submissionId: string, content: string) {
+  async updateDraft(
+    actor: AuthenticatedUser,
+    submissionId: string,
+    content: string,
+    requestId?: string,
+  ) {
     return this.prisma.$transaction(async (transaction) => {
       const submission = await transaction.submission.findUnique({
         where: { id: submissionId },
@@ -74,10 +90,22 @@ export class SubmissionsService {
         });
       }
 
-      return transaction.submission.update({
+      const updated = await transaction.submission.update({
         where: { id: lockedSubmission.id },
         data: { content },
       });
+      await transaction.auditLog.create({
+        data: {
+          actorId: actor.id,
+          entityType: 'Submission',
+          entityId: updated.id,
+          action: 'SUBMISSION_UPDATED',
+          before: { contentLength: lockedSubmission.content.length },
+          after: { contentLength: updated.content.length },
+          requestId,
+        },
+      });
+      return updated;
     });
   }
 

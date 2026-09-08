@@ -7,12 +7,23 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
-import { Prisma, ReviewStatus, Role, SubmissionStatus, TaskStatus } from '@prisma/client';
+import {
+  Prisma,
+  ReviewDecision,
+  ReviewStatus,
+  Role,
+  SubmissionStatus,
+  TaskStatus,
+} from '@prisma/client';
 import { TaskWorkflowService } from '../tasks/task-workflow.service';
 import { UsersService } from '../users/users.service';
 import { ReviewAccessPolicy } from './review-access.policy';
 import { paginationMeta } from '../../common/dto/pagination.dto';
-import { ReviewNotEditableException } from '../../common/exceptions/domain.exceptions';
+import {
+  ConcurrentModificationException,
+  ReviewIncompleteException,
+  ReviewNotEditableException,
+} from '../../common/exceptions/domain.exceptions';
 @Injectable()
 export class ReviewsService {
   constructor(
@@ -38,11 +49,22 @@ export class ReviewsService {
       });
       if (!submission)
         throw new NotFoundException({ code: 'NOT_FOUND', message: 'Submission not found' });
+      await this.lockTask(tx, submission.taskId);
       if (submission.status !== SubmissionStatus.SUBMITTED)
         throw new ConflictException({
           code: 'INVALID_STATE_TRANSITION',
           message: 'Only submitted work can be reviewed',
         });
+      const existing = await tx.review.findUnique({
+        where: { submissionId_reviewerId: { submissionId, reviewerId } },
+      });
+      if (existing) {
+        if (existing.rubricVersionId === rubricVersionId) return existing;
+        throw new ConflictException({
+          code: 'REVIEW_ALREADY_EXISTS',
+          message: 'This reviewer already has a review for the submission',
+        });
+      }
       const rubric = await tx.rubricVersion.findUnique({
         where: { id: rubricVersionId },
         include: { rubric: true },
@@ -56,6 +78,16 @@ export class ReviewsService {
         data: { submissionId, reviewerId, rubricVersionId },
       });
       await this.workflow.transition(tx, actor, submission.taskId, TaskStatus.IN_REVIEW, requestId);
+      await tx.auditLog.create({
+        data: {
+          actorId: actor.id,
+          entityType: 'Review',
+          entityId: review.id,
+          action: 'REVIEW_CREATED',
+          after: { submissionId, reviewerId, rubricVersionId, status: review.status },
+          requestId,
+        },
+      });
       return review;
     });
   }
@@ -104,6 +136,7 @@ export class ReviewsService {
     requestId?: string,
   ) {
     return this.prisma.$transaction(async (tx) => {
+      await this.lockReview(tx, reviewId);
       const review = await tx.review.findUnique({ where: { id: reviewId } });
       if (!review) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Review not found' });
       this.access.assertCanScore(actor, review);
@@ -136,7 +169,7 @@ export class ReviewsService {
           actorId: actor.id,
           entityType: 'ReviewScore',
           entityId: savedScore.id,
-          action: previousScore ? 'UPDATED' : 'CREATED',
+          action: previousScore ? 'REVIEW_SCORE_UPDATED' : 'REVIEW_SCORE_CREATED',
           before: previousScore
             ? { score: Number(previousScore.score), comment: previousScore.comment }
             : Prisma.JsonNull,
@@ -146,5 +179,109 @@ export class ReviewsService {
       });
       return savedScore;
     });
+  }
+
+  async decide(
+    actor: AuthenticatedUser,
+    reviewId: string,
+    decision: ReviewDecision,
+    requestId?: string,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      // Scoring uses the same lock, so no score can be committed after this review closes.
+      await this.lockReview(tx, reviewId);
+      const review = await tx.review.findUnique({
+        where: { id: reviewId },
+        include: {
+          submission: { include: { task: true } },
+          rubricVersion: { include: { criteria: true } },
+          scores: { include: { rubricCriterion: true } },
+        },
+      });
+      if (!review) throw new NotFoundException({ code: 'NOT_FOUND', message: 'Review not found' });
+      this.access.assertCanDecide(actor, review);
+      if (review.status !== ReviewStatus.OPEN) throw new ReviewNotEditableException();
+      if (decision === ReviewDecision.APPROVED) this.assertReviewIsComplete(review);
+
+      const targetStatus =
+        decision === ReviewDecision.APPROVED ? TaskStatus.APPROVED : TaskStatus.REWORK;
+      // TaskWorkflowService remains the single authority for Task.status and task-state audit.
+      await this.workflow.transition(tx, actor, review.submission.taskId, targetStatus, requestId);
+      const completedAt = new Date();
+      const result = await tx.review.updateMany({
+        where: { id: review.id, status: ReviewStatus.OPEN },
+        data: {
+          status:
+            decision === ReviewDecision.APPROVED
+              ? ReviewStatus.APPROVED
+              : ReviewStatus.REWORK_REQUESTED,
+          decision,
+          completedAt,
+        },
+      });
+      if (result.count !== 1) throw new ConcurrentModificationException();
+      const completedReview = await tx.review.findUniqueOrThrow({ where: { id: review.id } });
+      await tx.auditLog.create({
+        data: {
+          actorId: actor.id,
+          entityType: 'Review',
+          entityId: review.id,
+          action:
+            decision === ReviewDecision.APPROVED ? 'REVIEW_APPROVED' : 'REVIEW_REWORK_REQUESTED',
+          before: {
+            status: review.status,
+            decision: review.decision,
+            completedAt: review.completedAt,
+          },
+          after: {
+            status: completedReview.status,
+            decision: completedReview.decision,
+            completedAt: completedReview.completedAt,
+          },
+          requestId,
+        },
+      });
+      return completedReview;
+    });
+  }
+
+  private assertReviewIsComplete(review: {
+    rubricVersion: {
+      criteria: { id: string; minScore: Prisma.Decimal; maxScore: Prisma.Decimal }[];
+    };
+    scores: {
+      rubricCriterionId: string;
+      score: Prisma.Decimal;
+      rubricCriterion: { rubricVersionId: string };
+    }[];
+  }) {
+    const criteria = review.rubricVersion.criteria;
+    const criterionIds = new Set(criteria.map((criterion) => criterion.id));
+    if (
+      criteria.length === 0 ||
+      review.scores.length !== criteria.length ||
+      review.scores.some((score) => !criterionIds.has(score.rubricCriterionId))
+    ) {
+      throw new ReviewIncompleteException();
+    }
+    const criteriaById = new Map(criteria.map((criterion) => [criterion.id, criterion]));
+    for (const score of review.scores) {
+      const criterion = criteriaById.get(score.rubricCriterionId);
+      if (
+        !criterion ||
+        Number(score.score) < Number(criterion.minScore) ||
+        Number(score.score) > Number(criterion.maxScore)
+      ) {
+        throw new ReviewIncompleteException();
+      }
+    }
+  }
+
+  private lockReview(transaction: Prisma.TransactionClient, reviewId: string) {
+    return transaction.$executeRaw`SELECT 1 FROM "Review" WHERE id = ${reviewId}::uuid FOR UPDATE`;
+  }
+
+  private lockTask(transaction: Prisma.TransactionClient, taskId: string) {
+    return transaction.$executeRaw`SELECT 1 FROM "Task" WHERE id = ${taskId}::uuid FOR UPDATE`;
   }
 }

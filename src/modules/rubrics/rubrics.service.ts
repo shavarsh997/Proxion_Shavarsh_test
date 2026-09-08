@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 export interface CriterionInput {
   name: string;
   description?: string;
@@ -12,13 +13,43 @@ export interface CriterionInput {
 export class RubricsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(projectId: string, name: string, criteria: CriterionInput[]) {
+  async create(
+    actor: AuthenticatedUser,
+    projectId: string,
+    name: string,
+    criteria: CriterionInput[],
+    requestId?: string,
+  ) {
     this.assertCriteriaAreValid(criteria);
     await this.requireProject(projectId);
     return this.prisma.$transaction(async (tx) => {
       const rubric = await tx.rubric.create({ data: { projectId, name } });
-      await tx.rubricVersion.create({
+      const version = await tx.rubricVersion.create({
         data: { rubricId: rubric.id, version: 1, criteria: { create: criteria } },
+      });
+      await tx.auditLog.createMany({
+        data: [
+          {
+            actorId: actor.id,
+            entityType: 'Rubric',
+            entityId: rubric.id,
+            action: 'RUBRIC_CREATED',
+            after: { projectId, name },
+            requestId,
+          },
+          {
+            actorId: actor.id,
+            entityType: 'RubricVersion',
+            entityId: version.id,
+            action: 'RUBRIC_VERSION_CREATED',
+            after: {
+              rubricId: rubric.id,
+              version: version.version,
+              criteriaCount: criteria.length,
+            },
+            requestId,
+          },
+        ],
       });
       return tx.rubric.findUniqueOrThrow({
         where: { id: rubric.id },
@@ -26,7 +57,12 @@ export class RubricsService {
       });
     });
   }
-  async version(rubricId: string, criteria: CriterionInput[]) {
+  async version(
+    actor: AuthenticatedUser,
+    rubricId: string,
+    criteria: CriterionInput[],
+    requestId?: string,
+  ) {
     this.assertCriteriaAreValid(criteria);
     return this.prisma.$transaction(async (tx) => {
       const rubric = await tx.rubric.findUnique({ where: { id: rubricId } });
@@ -38,10 +74,21 @@ export class RubricsService {
         orderBy: { version: 'desc' },
         select: { version: true },
       });
-      return tx.rubricVersion.create({
+      const version = await tx.rubricVersion.create({
         data: { rubricId, version: (last?.version ?? 0) + 1, criteria: { create: criteria } },
         include: { criteria: true },
       });
+      await tx.auditLog.create({
+        data: {
+          actorId: actor.id,
+          entityType: 'RubricVersion',
+          entityId: version.id,
+          action: 'RUBRIC_VERSION_CREATED',
+          after: { rubricId, version: version.version, criteriaCount: criteria.length },
+          requestId,
+        },
+      });
+      return version;
     });
   }
   async getVersion(rubricId: string, version: number) {

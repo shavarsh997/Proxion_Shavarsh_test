@@ -46,7 +46,7 @@ Client / Swagger
        v
 NestJS HTTP API
        |
-       +-- Request ID middleware
+       +-- Request ID + structured HTTP logging middleware
        +-- JwtAuthGuard: authentication
        +-- RolesGuard: coarse role authorization
        +-- Controller + DTO validation
@@ -101,7 +101,7 @@ Each domain module keeps its controller, service, module declaration, policy whe
 
 | Layer | Responsibility |
 | --- | --- |
-| `JwtAuthGuard` | Authenticates the request, validates the Bearer token, and attaches the authenticated user to `request.user`. |
+| `JwtAuthGuard` | Validates the Bearer token, reloads the active user and current role from PostgreSQL, and attaches that user to `request.user`. |
 | `RolesGuard` | Performs coarse role authorization for `ADMIN`, `EXPERT`, and `REVIEWER`. |
 | `TaskAccessPolicy` / `ReviewAccessPolicy` | Performs resource-level authorization from assignments and review ownership. |
 
@@ -150,13 +150,17 @@ APPROVED -> terminal
 
 There is no `REWORK -> APPROVED` transition. After rework, the expert creates and submits a new Submission version; an admin starts a new review cycle; only that review cycle can lead to approval.
 
+Reviewer decisions belong to a concrete `Review`, not to a Task selected indirectly. A review starts as `OPEN` and is completed exactly once with an immutable `decision` (`APPROVED` or `REWORK_REQUESTED`) and `completedAt`. The reviewer uses `POST /reviews/:id/approve` or `POST /reviews/:id/request-rework`; `TaskWorkflowService` remains the sole authority changing the related Task status.
+
+Approval requires a complete review: every criterion of the pinned `RubricVersion` must have exactly one score inside its allowed range. Otherwise the API returns `409 REVIEW_INCOMPLETE`. Rework deliberately does not require all criteria to be scored, allowing a reviewer to return clearly incomplete work early with focused feedback.
+
 ## Transactions and concurrency
 
 Critical operations use explicit Prisma transactions:
 
 - task transition: validate actor, access, and transition; update Task optimistically; insert audit entry;
 - submission finalization: lock the Task row; finalize the latest draft; transition the Task to `SUBMITTED` in the same transaction;
-- reviewer decision: transition the Task and complete the corresponding open Review in the same transaction;
+- reviewer decision: lock the Review, validate ownership and completion, transition the Task, complete the Review, and write audit records in the same transaction;
 - score mutation: validate the criterion and range; create or update `ReviewScore`; write real `before` and `after` values to AuditLog in the same transaction.
 
 If any step fails, the transaction rolls back. This prevents a submitted Submission with an `IN_PROGRESS` task, or a `SUBMITTED` task with a draft Submission.
@@ -164,7 +168,9 @@ If any step fails, the transaction rolls back. This prevents a submitted Submiss
 The repository deliberately uses two complementary concurrency mechanisms:
 
 - **Optimistic locking** protects normal Task state transitions with `UPDATE ... WHERE id = taskId AND version = expectedVersion`. A stale request receives `409 CONCURRENT_MODIFICATION` without holding a database lock while the request is processed.
-- **Row-level locking** (`SELECT ... FOR UPDATE`) is reserved for short critical sections that allocate the next monotonically increasing `Submission.version` or `RubricVersion.version`, and for submission finalization/draft updates that must not race each other.
+- **Row-level locking** (`SELECT ... FOR UPDATE`) is reserved for short critical sections that allocate the next monotonically increasing `Submission.version` or `RubricVersion.version`, submission finalization/draft updates, review scoring/decisions, and idempotent assignment creation.
+
+`Assignment` is unique by `(taskId, expertId)`. Repeating the same assignment returns the existing assignment without an extra audit event. Concurrent repeated submit or review-decision requests produce one committed transition; the other request receives a controlled `409` rather than creating duplicate business history.
 
 ## Versioning and historical data
 
@@ -184,7 +190,9 @@ Review -> one Submission version + one exact RubricVersion
 
 ## Auditability and errors
 
-`AuditLog` is append-only at the application layer. The application only inserts and reads audit records; it exposes no `PATCH` or `DELETE` audit endpoint. Production hardening could enforce immutable submissions and append-only auditing with restricted database permissions or PostgreSQL triggers.
+`AuditLog` is append-only at the application layer. The application only inserts and reads audit records; it exposes no `PATCH` or `DELETE` audit endpoint. Project/task creation, assignment, submission lifecycle, rubric/version creation, review creation, score changes, and review decisions are written in the same transaction as their domain change. Entries deliberately record metadata rather than submission text, passwords, tokens, or secrets. Production hardening could enforce immutable submissions and append-only auditing with restricted database permissions or PostgreSQL triggers.
+
+Application diagnostics are separate from AuditLog. A request-completion middleware emits a safe structured record with request ID, method, path, authenticated user ID, status and duration; the exception filter emits a corresponding structured error/warning record without request bodies, authorization headers or infrastructure details.
 
 [`ApiExceptionFilter`](src/common/filters/api-exception.filter.ts) normalizes domain exceptions, Nest HTTP exceptions, validation failures, Prisma known errors, and unexpected errors. It does not expose SQL, Prisma internals, stack traces, database credentials, or raw infrastructure errors.
 
@@ -197,7 +205,13 @@ Review -> one Submission version + one exact RubricVersion
 }
 ```
 
-Every request accepts `X-Request-ID`; if omitted, the API generates one and returns it in the response header and error payload.
+Every request accepts `X-Request-ID`; a client value is retained only when it is 1–128 safe alphanumeric/`._-` characters, otherwise the API generates a UUID. The ID is returned in the response header and error payload, passed to application logs, and stored in business audit records.
+
+## Authentication hardening
+
+`User.isActive` is checked at login and on every authenticated request. Deactivating a user invalidates an already-issued access token immediately; reloading the user also makes a role change effective immediately instead of waiting for the token's eight-hour expiry. This project does not implement refresh tokens or token-version revocation, so a still-active user's stolen token remains usable until expiry.
+
+`POST /auth/login` is protected with Nest's in-memory throttler at ten attempts per minute per client IP. When deployed behind a known reverse proxy, set `TRUST_PROXY=true` so Express derives the client IP from forwarded headers; do not enable it for untrusted direct traffic.
 
 ## API and tests
 
@@ -205,10 +219,10 @@ List endpoints use `?page=1&limit=20`, with a maximum `limit` of 100, and return
 
 - `POST /auth/login`
 - `GET|POST /projects`, `POST /projects/:projectId/tasks`
-- `GET /tasks`, `POST /tasks/:id/start|submit|request-rework|approve`
+- `GET /tasks`, `POST /tasks/:id/start|submit`
 - `POST|GET /tasks/:taskId/submissions`, `PATCH /submissions/:id`, `GET /submissions/:id`
 - `POST /projects/:projectId/rubrics`, `POST /rubrics/:rubricId/versions`
-- `POST /submissions/:submissionId/reviews`, `GET|PUT /reviews`
+- `POST /submissions/:submissionId/reviews`, `GET|PUT /reviews`, `POST /reviews/:id/approve|request-rework`
 - `GET /audit-logs` for admins
 
 Example expert flow after an administrator has created and assigned a task:
@@ -230,7 +244,7 @@ curl -X POST http://localhost:3000/tasks/<task-id>/submit \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-An administrator creates a review using a particular immutable `rubricVersionId`; only the assigned reviewer can then `PUT /reviews/<review-id>/scores/<criterion-id>`. Swagger documents all request shapes and role-protected endpoints at `/api/docs`.
+An administrator creates a review using a particular immutable `rubricVersionId`; only the assigned reviewer can then `PUT /reviews/<review-id>/scores/<criterion-id>` and make its review-specific decision. Swagger documents all request shapes and role-protected endpoints at `/api/docs`.
 
 Run backend checks with:
 
@@ -249,7 +263,7 @@ The real HTTP workflow test in [`test/workflow.e2e-spec.ts`](test/workflow.e2e-s
 npm run test:e2e
 ```
 
-It covers login, project/task/rubric setup, assignment, v1 submission, scoring, rework, v2 submission, re-scoring, approval, immutable v1, exact rubric references, audit score history, and final Task status.
+It covers login, project/task/rubric setup, assignment, v1 submission, scoring, rework, v2 submission, re-scoring, approval, immutable v1, exact rubric references, audit score history, and final Task status. The test suite also exercises incomplete-review rejection, completed-review score immutability, resource access boundaries, and parallel submission/rubric-version/review/decision requests.
 
 `dev-client/` is an optional API exerciser. The root TypeScript, ESLint, Jest, Docker, build, and runtime configurations do not depend on it, so it can be removed without affecting the backend.
 

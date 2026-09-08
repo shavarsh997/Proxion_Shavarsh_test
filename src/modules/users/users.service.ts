@@ -11,6 +11,6 @@ export class UsersService {
   }
 
   findByIdWithRole(id: string, role: Role) {
-    return this.prisma.user.findFirst({ where: { id, role } });
+    return this.prisma.user.findFirst({ where: { id, role, isActive: true } });
   }
 }

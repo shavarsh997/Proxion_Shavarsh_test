@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, ReviewStatus, Role, SubmissionStatus, TaskStatus } from '@prisma/client';
+import { Prisma, Role, SubmissionStatus, TaskStatus } from '@prisma/client';
 import { paginationMeta } from '../../common/dto/pagination.dto';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { PrismaService } from '../../database/prisma.service';
@@ -27,9 +27,27 @@ export class TasksService {
     private readonly access: TaskAccessPolicy,
   ) {}
 
-  async create(projectId: string, input: { title: string; instructions: string }) {
+  async create(
+    actor: AuthenticatedUser,
+    projectId: string,
+    input: { title: string; instructions: string },
+    requestId?: string,
+  ) {
     await this.getProjectOrThrow(projectId);
-    return this.prisma.task.create({ data: { projectId, ...input } });
+    return this.prisma.$transaction(async (transaction) => {
+      const task = await transaction.task.create({ data: { projectId, ...input } });
+      await transaction.auditLog.create({
+        data: {
+          actorId: actor.id,
+          entityType: 'Task',
+          entityId: task.id,
+          action: 'TASK_CREATED',
+          after: { projectId, title: task.title, status: task.status },
+          requestId,
+        },
+      });
+      return task;
+    });
   }
 
   async list(actor: AuthenticatedUser, page: number, limit: number) {
@@ -47,7 +65,7 @@ export class TasksService {
     return { data, meta: paginationMeta(page, limit, total) };
   }
 
-  async assign(actor: AuthenticatedUser, taskId: string, expertId: string) {
+  async assign(actor: AuthenticatedUser, taskId: string, expertId: string, requestId?: string) {
     const task = await this.getTaskOrThrow(taskId);
     const expert = await this.users.findByIdWithRole(expertId, Role.EXPERT);
 
@@ -55,8 +73,26 @@ export class TasksService {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Expert not found' });
     }
 
-    return this.prisma.assignment.create({
-      data: { taskId: task.id, expertId, assignedById: actor.id },
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.$executeRaw`SELECT 1 FROM "Task" WHERE id = ${task.id}::uuid FOR UPDATE`;
+      const existing = await transaction.assignment.findUnique({
+        where: { taskId_expertId: { taskId: task.id, expertId } },
+      });
+      if (existing) return existing;
+      const assignment = await transaction.assignment.create({
+        data: { taskId: task.id, expertId, assignedById: actor.id },
+      });
+      await transaction.auditLog.create({
+        data: {
+          actorId: actor.id,
+          entityType: 'Assignment',
+          entityId: assignment.id,
+          action: 'EXPERT_ASSIGNED',
+          after: { taskId: task.id, expertId },
+          requestId,
+        },
+      });
+      return assignment;
     });
   }
 
@@ -90,7 +126,18 @@ export class TasksService {
     return this.prisma.$transaction(async (transaction) => {
       if (targetStatus === TaskStatus.SUBMITTED) {
         await this.lockTaskForSubmissionLifecycle(transaction, taskId);
-        await this.finalizeLatestSubmission(transaction, actor, taskId);
+        const submission = await this.finalizeLatestSubmission(transaction, actor, taskId);
+        await transaction.auditLog.create({
+          data: {
+            actorId: actor.id,
+            entityType: 'Submission',
+            entityId: submission.id,
+            action: 'SUBMISSION_SUBMITTED',
+            before: { status: SubmissionStatus.DRAFT },
+            after: { status: SubmissionStatus.SUBMITTED, version: submission.version },
+            requestId,
+          },
+        });
       }
       const task = await this.workflow.transition(
         transaction,
@@ -99,9 +146,6 @@ export class TasksService {
         targetStatus,
         requestId,
       );
-      if (targetStatus === TaskStatus.REWORK || targetStatus === TaskStatus.APPROVED) {
-        await this.completeReviewerDecision(transaction, actor.id, taskId, targetStatus);
-      }
       return task;
     });
   }
@@ -147,13 +191,13 @@ export class TasksService {
       });
     }
     if (latestSubmission.status === SubmissionStatus.SUBMITTED) {
-      throw new ForbiddenException({
-        code: 'SUBMISSION_ALREADY_FINALIZED',
+      throw new ConflictException({
+        code: 'INVALID_STATE_TRANSITION',
         message: 'Latest submission is already finalized',
       });
     }
 
-    await transaction.submission.update({
+    return transaction.submission.update({
       where: { id: latestSubmission.id },
       data: { status: SubmissionStatus.SUBMITTED, submittedAt: new Date() },
     });
@@ -162,34 +206,6 @@ export class TasksService {
   private lockTaskForSubmissionLifecycle(transaction: Prisma.TransactionClient, taskId: string) {
     // Submission creation locks the same parent row, preventing a draft version from racing a submit.
     return transaction.$executeRaw`SELECT 1 FROM "Task" WHERE id = ${taskId}::uuid FOR UPDATE`;
-  }
-
-  private async completeReviewerDecision(
-    transaction: Prisma.TransactionClient,
-    reviewerId: string,
-    taskId: string,
-    targetStatus: TaskStatus,
-  ) {
-    const review = await transaction.review.findFirst({
-      where: { reviewerId, status: ReviewStatus.OPEN, submission: { taskId } },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (!review) {
-      throw new ConflictException({
-        code: 'REVIEW_NOT_OPEN',
-        message: 'An open review is required for this reviewer decision',
-      });
-    }
-    await transaction.review.update({
-      where: { id: review.id },
-      data: {
-        status:
-          targetStatus === TaskStatus.APPROVED
-            ? ReviewStatus.APPROVED
-            : ReviewStatus.REWORK_REQUESTED,
-        completedAt: new Date(),
-      },
-    });
   }
 
   private async getTaskOrThrow(taskId: string) {

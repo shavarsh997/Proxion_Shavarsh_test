@@ -7,8 +7,27 @@ import { PrismaService } from '../../database/prisma.service';
 export class ProjectsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  create(actor: AuthenticatedUser, input: { name: string; description?: string }) {
-    return this.prisma.project.create({ data: { ...input, createdById: actor.id } });
+  create(
+    actor: AuthenticatedUser,
+    input: { name: string; description?: string },
+    requestId?: string,
+  ) {
+    return this.prisma.$transaction(async (transaction) => {
+      const project = await transaction.project.create({
+        data: { ...input, createdById: actor.id },
+      });
+      await transaction.auditLog.create({
+        data: {
+          actorId: actor.id,
+          entityType: 'Project',
+          entityId: project.id,
+          action: 'PROJECT_CREATED',
+          after: { name: project.name },
+          requestId,
+        },
+      });
+      return project;
+    });
   }
 
   async list(page: number, limit: number) {

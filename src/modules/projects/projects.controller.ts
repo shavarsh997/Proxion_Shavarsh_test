@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { RequestId } from '../../common/decorators/request-id.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -27,8 +28,12 @@ import { CreateProjectDto } from './dto/create-project.dto';
 export class ProjectsController {
   constructor(private readonly projects: ProjectsService) {}
 
-  @Post() create(@CurrentUser() actor: AuthenticatedUser, @Body() dto: CreateProjectDto) {
-    return this.projects.create(actor, dto);
+  @Post() create(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Body() dto: CreateProjectDto,
+    @RequestId() requestId: string,
+  ) {
+    return this.projects.create(actor, dto, requestId);
   }
 
   @Get() list(@Query() query: PaginationDto) {

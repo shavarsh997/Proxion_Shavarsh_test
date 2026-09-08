@@ -39,7 +39,7 @@ export class TaskWorkflowService {
         actorId: actor.id,
         entityType: 'Task',
         entityId: task.id,
-        action: 'STATUS_CHANGED',
+        action: targetStatus === TaskStatus.IN_PROGRESS ? 'TASK_STARTED' : 'TASK_STATUS_CHANGED',
         before: { status: task.status, version: task.version },
         after: { status: transitionedTask.status, version: transitionedTask.version },
         requestId,

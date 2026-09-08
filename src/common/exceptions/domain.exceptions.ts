@@ -30,6 +30,15 @@ export class ReviewNotEditableException extends ConflictException {
   }
 }
 
+export class ReviewIncompleteException extends ConflictException {
+  constructor() {
+    super({
+      code: 'REVIEW_INCOMPLETE',
+      message: 'All rubric criteria must be scored before approval',
+    });
+  }
+}
+
 export class SubmissionImmutableException extends ConflictException {
   constructor() {
     super({
