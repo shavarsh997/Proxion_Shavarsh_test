@@ -1,4 +1,4 @@
-import { IsString, IsUUID, MinLength } from 'class-validator';
+import { IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 
 export class CreateSubmissionDto {
   @IsUUID()
@@ -6,5 +6,6 @@ export class CreateSubmissionDto {
 
   @IsString()
   @MinLength(1)
+  @MaxLength(50_000)
   content!: string;
 }

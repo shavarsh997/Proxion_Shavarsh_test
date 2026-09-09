@@ -3,6 +3,10 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 
+// Comparing against a real bcrypt hash even for an unknown account prevents the
+// login endpoint from becoming an email-enumeration oracle through response time.
+const DUMMY_PASSWORD_HASH = '$2b$12$T7P6JUz1nyfopRwdv1lQ6eJQ9WA6lNPItouFuTz8.yDAAHdAgO.3e';
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -12,7 +16,11 @@ export class AuthService {
 
   async login(email: string, password: string) {
     const user = await this.users.findByEmail(email);
-    if (!user || !user.isActive || !(await bcrypt.compare(password, user.passwordHash))) {
+    const passwordMatches = await bcrypt.compare(
+      password,
+      user?.passwordHash ?? DUMMY_PASSWORD_HASH,
+    );
+    if (!user || !user.isActive || !passwordMatches) {
       throw new UnauthorizedException({
         code: 'INVALID_CREDENTIALS',
         message: 'Invalid email or password',

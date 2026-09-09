@@ -1,9 +1,10 @@
 import { Type } from 'class-transformer';
-import { ArrayMinSize, IsArray, IsString, ValidateNested } from 'class-validator';
+import { ArrayMinSize, IsArray, IsString, MaxLength, ValidateNested } from 'class-validator';
 import { CriterionDto } from './criterion.dto';
 
 export class CreateRubricDto {
   @IsString()
+  @MaxLength(200)
   name!: string;
 
   @IsArray()

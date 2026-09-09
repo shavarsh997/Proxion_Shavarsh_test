@@ -27,7 +27,7 @@
     "@nestjs/swagger": "^7.4.2",
     "@nestjs/throttler": "^6.5.0",
     "@prisma/client": "^5.22.0",
-    "bcrypt": "^5.1.1",
+    "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "helmet": "^7.1.0",
@@ -62,5 +62,13 @@
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
+  },
+  "resolutions": {
+    "body-parser": "1.20.6",
+    "file-type": "21.3.2",
+    "js-yaml": "4.3.2",
+    "lodash": "4.18.1",
+    "multer": "2.3.0",
+    "qs": "6.16.0"
   }
 }

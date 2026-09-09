@@ -9,10 +9,15 @@ export type RequestLog = {
 };
 
 const baseUrl = (import.meta.env.VITE_API_URL ?? 'http://localhost:3000').replace(/\/$/, '');
-const logKey = 'proxion-dev-request-log';
-export const getLogs = (): RequestLog[] => JSON.parse(localStorage.getItem(logKey) ?? '[]');
-const addLog = (entry: RequestLog) =>
-  localStorage.setItem(logKey, JSON.stringify([entry, ...getLogs()].slice(0, 20)));
+const logs: RequestLog[] = [];
+
+// Request bodies can contain submissions and reviewer feedback. Keep the optional
+// developer panel's diagnostics in memory instead of persisting that data in the browser.
+export const getLogs = (): RequestLog[] => [...logs];
+const addLog = (entry: RequestLog) => {
+  logs.unshift(entry);
+  logs.splice(20);
+};
 
 export class ApiClient {
   constructor(private readonly token: string | null) {}

@@ -174,6 +174,9 @@ export class TasksService {
     return {
       ...taskDetails,
       assignments: {
+        // Assignments identify other experts and the assigning admin. They are only
+        // needed by an admin, the assigned expert, or a reviewer of that submission.
+        where: this.assignmentVisibilityFor(actor),
         include: {
           submissions: {
             where: this.submissionVisibilityFor(actor),
@@ -182,6 +185,12 @@ export class TasksService {
         },
       },
     };
+  }
+
+  private assignmentVisibilityFor(actor: AuthenticatedUser): Prisma.AssignmentWhereInput {
+    if (actor.role === Role.ADMIN) return {};
+    if (actor.role === Role.EXPERT) return { expertId: actor.id };
+    return { submissions: { some: { reviews: { some: { reviewerId: actor.id } } } } };
   }
 
   private submissionVisibilityFor(actor: AuthenticatedUser): Prisma.SubmissionWhereInput {

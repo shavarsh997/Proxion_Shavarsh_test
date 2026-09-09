@@ -13,12 +13,15 @@ services:
     volumes: [postgres_data:/var/lib/postgresql/data]
   api:
     build: .
-    ports: ["3000:3000"]
+    # This composition is for local demo use. Do not expose its seeded accounts publicly.
+    ports: ["127.0.0.1:3000:3000"]
     environment:
       DATABASE_URL: postgresql://proxion:proxion@db:5432/proxion?schema=public
       JWT_SECRET: development-only-change-me-please
+      NODE_ENV: development
       PORT: 3000
       SEED_ON_START: "true"
+      SWAGGER_ENABLED: "true"
     depends_on:
       db: { condition: service_healthy }
 volumes:

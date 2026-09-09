@@ -5,6 +5,18 @@ import type { AuthenticatedUser } from '../interfaces/authenticated-user.interfa
 import { PrismaService } from '../../database/prisma.service';
 
 type AuthenticatedRequest = Request & { user?: AuthenticatedUser };
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isValidTokenUser(value: unknown): value is AuthenticatedUser {
+  if (!value || typeof value !== 'object') return false;
+  const user = value as Record<string, unknown>;
+  return (
+    typeof user.id === 'string' &&
+    UUID_PATTERN.test(user.id) &&
+    typeof user.email === 'string' &&
+    (user.role === 'ADMIN' || user.role === 'EXPERT' || user.role === 'REVIEWER')
+  );
+}
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -25,7 +37,10 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
-      const tokenUser = this.jwt.verify<AuthenticatedUser>(authorization.slice(7));
+      const tokenUser = this.jwt.verify<Record<string, unknown>>(authorization.slice(7), {
+        algorithms: ['HS256'],
+      });
+      if (!isValidTokenUser(tokenUser)) throw new Error('Malformed token claims');
       const user = await this.prisma.user.findFirst({
         where: { id: tokenUser.id, isActive: true },
         select: { id: true, email: true, role: true },

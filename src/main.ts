@@ -3,19 +3,23 @@ import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
 import { Logger } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import type { Express } from 'express';
+import { json, urlencoded, type Express } from 'express';
 import { AppModule } from './app.module';
 import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 import { requestIdMiddleware } from './common/middleware/request-id.middleware';
 import { httpLoggingMiddleware } from './common/middleware/http-logging.middleware';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
   const expressApp = app.getHttpAdapter().getInstance() as Express;
   expressApp.set('trust proxy', process.env.TRUST_PROXY === 'true');
   app.use(requestIdMiddleware);
   app.use(httpLoggingMiddleware);
   app.use(helmet());
+  // Workflow content is textual; keep request parsing bounded before validation
+  // so oversized bodies cannot consume unbounded memory or database storage.
+  app.use(json({ limit: '64kb' }));
+  app.use(urlencoded({ extended: false, limit: '16kb' }));
   const origins = (process.env.CORS_ORIGINS ?? 'http://localhost:5173')
     .split(',')
     .map((origin) => origin.trim());
@@ -31,7 +35,9 @@ async function bootstrap() {
     .setVersion('1.0')
     .addBearerAuth()
     .build();
-  SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, swaggerConfig));
+  if (process.env.SWAGGER_ENABLED === 'true') {
+    SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, swaggerConfig));
+  }
   await app.listen(process.env.PORT || 3000);
   Logger.log(`API listening on port ${process.env.PORT || 3000}`, 'Bootstrap');
 }

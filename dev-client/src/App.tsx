@@ -115,10 +115,9 @@ function Metric({ label, value }: { label: string; value: number }) {
 }
 
 export default function App() {
-  const [session, setSession] = useState<Session | null>(() => {
-    const stored = localStorage.getItem('proxion-dev-session');
-    return stored ? (JSON.parse(stored) as Session) : null;
-  });
+  // Keep the bearer token only in memory. This demo client intentionally asks
+  // the user to sign in again after a reload rather than retaining a token in storage.
+  const [session, setSession] = useState<Session | null>(null);
   const [tab, setTab] = useState<'dashboard' | 'tasks' | 'task' | 'admin' | 'reviews' | 'audit'>(
     'dashboard',
   );
@@ -178,11 +177,9 @@ export default function App() {
     );
     if (!result) return;
     const next = { token: result.accessToken, user: result.user };
-    localStorage.setItem('proxion-dev-session', JSON.stringify(next));
     setSession(next);
   };
   const logout = () => {
-    localStorage.removeItem('proxion-dev-session');
     setSession(null);
     setSelectedTask(null);
     setTasks([]);

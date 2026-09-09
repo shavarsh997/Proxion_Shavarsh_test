@@ -1,11 +1,13 @@
-import { IsInt, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsInt, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 export class CriterionDto {
   @IsString()
+  @MaxLength(200)
   name!: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   description?: string;
 
   @IsNumber()
