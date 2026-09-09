@@ -1,9 +1,4 @@
-import {
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { AuditAction, Prisma, Role, SubmissionStatus, TaskStatus } from '@prisma/client';
 import { paginationMeta } from '../../common/dto/pagination.dto';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
@@ -11,6 +6,10 @@ import { PrismaService } from '../../database/prisma.service';
 import { UsersService } from '../users/users.service';
 import { TaskAccessPolicy } from './task-access.policy';
 import { TaskWorkflowService } from './task-workflow.service';
+import {
+  InvalidStateTransitionException,
+  TaskAlreadyAssignedException,
+} from '../../common/exceptions/domain.exceptions';
 
 const taskDetails = {
   project: true,
@@ -77,10 +76,11 @@ export class TasksService {
     return this.prisma.$transaction(async (transaction) => {
       await transaction.$executeRaw`SELECT 1 FROM "Task" WHERE id = ${task.id}::uuid FOR UPDATE`;
       const lockedTask = await transaction.task.findUniqueOrThrow({ where: { id: task.id } });
-      const existing = await transaction.assignment.findUnique({
-        where: { taskId_expertId: { taskId: task.id, expertId } },
-      });
-      if (existing) return existing;
+      const existing = await transaction.assignment.findUnique({ where: { taskId: task.id } });
+      if (existing) {
+        if (existing.expertId === expertId) return existing;
+        throw new TaskAlreadyAssignedException();
+      }
       const assignment = await transaction.assignment.create({
         data: { taskId: task.id, expertId, assignedById: actor.id },
       });
@@ -134,6 +134,13 @@ export class TasksService {
     return this.prisma.$transaction(async (transaction) => {
       if (targetStatus === TaskStatus.SUBMITTED) {
         await this.lockTaskForSubmissionLifecycle(transaction, taskId);
+        const lockedTask = await transaction.task.findUnique({ where: { id: taskId } });
+        if (!lockedTask) {
+          throw new NotFoundException({ code: 'NOT_FOUND', message: 'Task not found' });
+        }
+        if (lockedTask.status !== TaskStatus.IN_PROGRESS) {
+          throw new InvalidStateTransitionException(lockedTask.status, TaskStatus.SUBMITTED);
+        }
         const submission = await this.finalizeLatestSubmission(transaction, actor, taskId);
         await transaction.auditLog.create({
           data: {
@@ -221,7 +228,10 @@ export class TasksService {
     taskId: string,
   ) {
     const latestSubmission = await transaction.submission.findFirst({
-      where: { assignment: { taskId, expertId: actor.id } },
+      where: {
+        status: SubmissionStatus.DRAFT,
+        assignment: { taskId, expertId: actor.id },
+      },
       orderBy: { version: 'desc' },
     });
 
@@ -231,13 +241,6 @@ export class TasksService {
         message: 'Create a submission before submitting the task',
       });
     }
-    if (latestSubmission.status === SubmissionStatus.SUBMITTED) {
-      throw new ConflictException({
-        code: 'INVALID_STATE_TRANSITION',
-        message: 'Latest submission is already finalized',
-      });
-    }
-
     return transaction.submission.update({
       where: { id: latestSubmission.id },
       data: { status: SubmissionStatus.SUBMITTED, submittedAt: new Date() },

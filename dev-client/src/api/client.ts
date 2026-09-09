@@ -8,7 +8,10 @@ export type RequestLog = {
   response: unknown;
 };
 
-const baseUrl = (import.meta.env.VITE_API_URL ?? 'http://localhost:3000').replace(/\/$/, '');
+// Keep browser requests behind the stable API namespace. In development, Vite proxies
+// this relative path to the Nest server; deployments can provide an absolute API base URL.
+const configuredBaseUrl = (import.meta.env.VITE_API_URL ?? '/api').trim().replace(/\/+$/, '');
+const baseUrl = configuredBaseUrl || '/api';
 const logs: RequestLog[] = [];
 
 // Request bodies can contain submissions and reviewer feedback. Keep the optional

@@ -235,7 +235,7 @@ async function main() {
   ] = await Promise.all(
     assignmentInputs.map(({ id, taskId, expertId }) =>
       prisma.assignment.upsert({
-        where: { taskId_expertId: { taskId, expertId } },
+        where: { taskId },
         update: { assignedById: admin.id },
         create: { id, taskId, expertId, assignedById: admin.id },
       }),

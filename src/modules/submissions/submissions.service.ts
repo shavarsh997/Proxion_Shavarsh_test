@@ -9,7 +9,10 @@ import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { PrismaService } from '../../database/prisma.service';
 import { TaskAccessPolicy } from '../tasks/task-access.policy';
-import { SubmissionImmutableException } from '../../common/exceptions/domain.exceptions';
+import {
+  ActiveDraftExistsException,
+  SubmissionImmutableException,
+} from '../../common/exceptions/domain.exceptions';
 
 @Injectable()
 export class SubmissionsService {
@@ -33,14 +36,20 @@ export class SubmissionsService {
     }
 
     return this.prisma.$transaction(async (transaction) => {
-      // Locking the parent Task serializes v(n + 1) allocation and submit finalization for one task.
+      // Lock before lifecycle reads. A waiting create must not reuse a stale IN_PROGRESS state
+      // after another transaction has already submitted the task.
+      await this.lockTaskForSubmissionLifecycle(transaction, taskId);
       const assignment = await this.assertExpertCanCreateSubmission(
         transaction,
         actor,
         taskId,
         assignmentId,
       );
-      await this.lockTaskForSubmissionLifecycle(transaction, taskId);
+      const activeDraft = await transaction.submission.findFirst({
+        where: { assignmentId: assignment.id, status: SubmissionStatus.DRAFT },
+        select: { id: true },
+      });
+      if (activeDraft) throw new ActiveDraftExistsException();
       const nextVersion = await this.getNextVersion(transaction, assignment.id);
 
       const submission = await transaction.submission.create({

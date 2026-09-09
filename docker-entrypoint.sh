@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
-npx prisma migrate deploy
+yarn prisma:migrate
 if [ "${SEED_ON_START:-false}" = "true" ]; then
-  npx prisma db seed
+  yarn prisma:seed
 fi
 exec node dist/src/main

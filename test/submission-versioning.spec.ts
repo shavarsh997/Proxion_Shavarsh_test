@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { Role, SubmissionStatus, TaskStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import type { PrismaService } from '../src/database/prisma.service';
@@ -48,7 +49,12 @@ describe('immutable submission versions', () => {
       },
       auditLog: { create: jest.fn() },
       submission: {
-        findFirst: jest.fn(async () => records[records.length - 1]),
+        findFirst: jest.fn(async ({ where }: { where: { status?: SubmissionStatus } }) => {
+          if (where.status === SubmissionStatus.DRAFT) {
+            return records.find((record) => record.status === SubmissionStatus.DRAFT) ?? null;
+          }
+          return records[records.length - 1];
+        }),
         create: jest.fn(async ({ data }: { data: SubmissionCreateInput }) => {
           const next = { id: 'v2', status: SubmissionStatus.DRAFT, ...data };
           records.push(next);
@@ -85,6 +91,7 @@ describe('immutable submission versions', () => {
 
   it('rejects an assignment owned by another expert', async () => {
     const tx = {
+      $executeRaw: jest.fn(),
       assignment: {
         findUnique: jest
           .fn()
@@ -104,5 +111,67 @@ describe('immutable submission versions', () => {
         'content',
       ),
     ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'FORBIDDEN' }) });
+  });
+
+  it('rejects a second active draft for the same assignment', async () => {
+    const tx = {
+      $executeRaw: jest.fn(),
+      assignment: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'assignment', taskId: 'task', expertId: 'expert' }),
+      },
+      task: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'task', status: TaskStatus.IN_PROGRESS }),
+      },
+      submission: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'draft-1' }),
+        create: jest.fn(),
+      },
+    };
+    const service = new SubmissionsService(
+      transactionalPrisma(tx),
+      new TaskAccessPolicy({} as unknown as PrismaService),
+    );
+
+    await expect(
+      service.create(
+        { id: 'expert', email: 'expert@test.local', role: Role.EXPERT },
+        'task',
+        'assignment',
+        'another draft',
+      ),
+    ).rejects.toMatchObject({ response: expect.objectContaining({ code: 'ACTIVE_DRAFT_EXISTS' }) });
+    expect(tx.submission.create).not.toHaveBeenCalled();
+  });
+
+  it('rechecks task state after acquiring the lifecycle lock', async () => {
+    const tx = {
+      $executeRaw: jest.fn(),
+      assignment: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'assignment', taskId: 'task', expertId: 'expert' }),
+      },
+      task: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'task', status: TaskStatus.SUBMITTED }),
+      },
+      submission: { findFirst: jest.fn(), create: jest.fn() },
+    };
+    const service = new SubmissionsService(
+      transactionalPrisma(tx),
+      new TaskAccessPolicy({} as unknown as PrismaService),
+    );
+
+    await expect(
+      service.create(
+        { id: 'expert', email: 'expert@test.local', role: Role.EXPERT },
+        'task',
+        'assignment',
+        'late draft',
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(tx.$executeRaw).toHaveBeenCalled();
+    expect(tx.submission.create).not.toHaveBeenCalled();
   });
 });

@@ -47,3 +47,21 @@ export class SubmissionImmutableException extends ConflictException {
     });
   }
 }
+
+export class TaskAlreadyAssignedException extends ConflictException {
+  constructor() {
+    super({
+      code: 'TASK_ALREADY_ASSIGNED',
+      message: 'Task is already assigned to another expert',
+    });
+  }
+}
+
+export class ActiveDraftExistsException extends ConflictException {
+  constructor() {
+    super({
+      code: 'ACTIVE_DRAFT_EXISTS',
+      message: 'Update or submit the existing draft before creating a new version',
+    });
+  }
+}

@@ -11,6 +11,8 @@ import { httpLoggingMiddleware } from './common/middleware/http-logging.middlewa
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
+  const apiPrefix = 'api';
+  app.setGlobalPrefix(apiPrefix);
   const expressApp = app.getHttpAdapter().getInstance() as Express;
   expressApp.set('trust proxy', process.env.TRUST_PROXY === 'true');
   app.use(requestIdMiddleware);
@@ -36,7 +38,7 @@ async function bootstrap() {
     .addBearerAuth()
     .build();
   if (process.env.SWAGGER_ENABLED === 'true') {
-    SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, swaggerConfig));
+    SwaggerModule.setup(`${apiPrefix}/docs`, app, SwaggerModule.createDocument(app, swaggerConfig));
   }
   await app.listen(process.env.PORT || 3000);
   Logger.log(`API listening on port ${process.env.PORT || 3000}`, 'Bootstrap');

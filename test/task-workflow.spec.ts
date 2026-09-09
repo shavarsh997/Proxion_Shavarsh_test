@@ -61,7 +61,14 @@ describe('TaskWorkflowService', () => {
       data: { status: TaskStatus.IN_PROGRESS, version: { increment: 1 } },
     });
     expect(tx.auditLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ requestId: 'request-1' }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'TASK_STATUS_CHANGED',
+          before: { status: TaskStatus.ASSIGNED, version: 0 },
+          after: { status: TaskStatus.IN_PROGRESS, version: 1 },
+          requestId: 'request-1',
+        }),
+      }),
     );
   });
 

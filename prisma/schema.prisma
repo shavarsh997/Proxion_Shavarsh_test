@@ -42,6 +42,7 @@ enum AuditAction {
   PROJECT_CREATED
   TASK_CREATED
   EXPERT_ASSIGNED
+  TASK_STATUS_CHANGED
   TASK_STARTED
   SUBMISSION_CREATED
   SUBMISSION_UPDATED
@@ -98,7 +99,7 @@ model Task {
 
 model Assignment {
   id           String   @id @default(uuid()) @db.Uuid
-  taskId       String   @db.Uuid
+  taskId       String   @unique @db.Uuid
   expertId     String   @db.Uuid
   assignedById String   @db.Uuid
   assignedAt   DateTime @default(now())
@@ -108,8 +109,6 @@ model Assignment {
   submissions  Submission[]
 
   @@index([expertId, taskId])
-  @@index([taskId])
-  @@unique([taskId, expertId])
 }
 
 model Submission {

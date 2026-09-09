@@ -49,7 +49,28 @@ type Project = {
   description?: string | null;
   _count?: { tasks: number; rubrics: number };
 };
+type ProjectWithRubrics = Project & {
+  rubrics: { id: string; name: string; versions: { id: string; version: number }[] }[];
+};
 type Session = { token: string; user: User };
+
+const asApiError = (caught: unknown): ApiError => {
+  if (typeof caught === 'object' && caught !== null) {
+    const value = caught as Partial<ApiError>;
+    if (typeof value.status === 'number' && typeof value.code === 'string') {
+      return {
+        status: value.status,
+        code: value.code,
+        message: typeof value.message === 'string' ? value.message : 'Request failed',
+      };
+    }
+  }
+  return {
+    status: 0,
+    code: 'CLIENT_ERROR',
+    message: caught instanceof Error ? caught.message : 'Unexpected client error',
+  };
+};
 
 const users = {
   ADMIN: { email: 'admin@proxion.local', id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
@@ -57,7 +78,6 @@ const users = {
   REVIEWER: { email: 'reviewer@proxion.local', id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
 } as const;
 const password = 'Password123!';
-const defaultRubricVersionId = '55555555-5555-4555-8555-555555555551';
 const initialCriteria = JSON.stringify(
   [
     {
@@ -157,7 +177,7 @@ export default function App() {
       if (shouldRefresh) await refresh();
       return result;
     } catch (caught) {
-      setError(caught as ApiError);
+      setError(asApiError(caught));
       return undefined;
     } finally {
       setBusy(false);
@@ -463,12 +483,50 @@ function TaskWorkspace({
 }) {
   const [content, setContent] = useState('');
   const [reviewerId, setReviewerId] = useState<string>(users.REVIEWER.id);
-  const [rubricVersionId, setRubricVersionId] = useState(defaultRubricVersionId);
+  const [rubricVersionId, setRubricVersionId] = useState('');
+  const [rubricVersions, setRubricVersions] = useState<
+    { id: string; version: number; rubricName: string }[]
+  >([]);
   const [submissionId, setSubmissionId] = useState('');
+  useEffect(() => {
+    if (user.role !== 'ADMIN' || !task) {
+      setRubricVersions([]);
+      setRubricVersionId('');
+      setSubmissionId('');
+      return;
+    }
+
+    let active = true;
+    setRubricVersions([]);
+    setRubricVersionId('');
+    setSubmissionId('');
+    void api
+      .get<ProjectWithRubrics>(`/projects/${task.project.id}`)
+      .then((project) => {
+        if (!active) return;
+        const versions = project.rubrics.flatMap((rubric) =>
+          rubric.versions.map((version) => ({ ...version, rubricName: rubric.name })),
+        );
+        setRubricVersions(versions);
+        setRubricVersionId(versions[0]?.id ?? '');
+      })
+      .catch(() => {
+        if (!active) return;
+        setRubricVersions([]);
+        setRubricVersionId('');
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [api, task?.id, task?.project.id, user.role]);
   if (!task) return <TaskList tasks={[]} openTask={openTask} />;
   const assignment = ownAssignment(task, user.id);
   const latest = [...task.submissions].sort((left, right) => right.version - left.version)[0];
-  const selectedSubmission = submissionId || latest?.id;
+  const submittedSubmissions = task.submissions.filter(
+    (submission) => submission.status === 'SUBMITTED',
+  );
+  const selectedSubmission = submissionId || submittedSubmissions[0]?.id;
   const createSubmission = () =>
     assignment &&
     void run(() =>
@@ -545,23 +603,38 @@ function TaskWorkspace({
             <select
               value={selectedSubmission ?? ''}
               onChange={(event) => setSubmissionId(event.target.value)}
+              disabled={submittedSubmissions.length === 0}
             >
-              {task.submissions.map((submission) => (
-                <option key={submission.id} value={submission.id}>
-                  v{submission.version} · {submission.status}
-                </option>
-              ))}
+              {submittedSubmissions.length === 0 ? (
+                <option value="">No submitted version available</option>
+              ) : (
+                submittedSubmissions.map((submission) => (
+                  <option key={submission.id} value={submission.id}>
+                    v{submission.version} · {submission.status}
+                  </option>
+                ))
+              )}
             </select>
             <input
               value={reviewerId}
               onChange={(event) => setReviewerId(event.target.value)}
               placeholder="Reviewer UUID"
             />
-            <input
+            <select
               value={rubricVersionId}
               onChange={(event) => setRubricVersionId(event.target.value)}
-              placeholder="Rubric version UUID"
-            />
+              disabled={rubricVersions.length === 0}
+            >
+              {rubricVersions.length === 0 ? (
+                <option value="">No rubric version for this project</option>
+              ) : (
+                rubricVersions.map((version) => (
+                  <option key={version.id} value={version.id}>
+                    {version.rubricName} · v{version.version}
+                  </option>
+                ))
+              )}
+            </select>
             <button
               disabled={!selectedSubmission || !rubricVersionId}
               onClick={() =>
