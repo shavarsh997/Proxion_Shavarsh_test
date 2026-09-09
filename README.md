@@ -277,10 +277,8 @@ yarn test:e2e
 
 It covers login, project/task/rubric setup, assignment, v1 submission, scoring, rework, v2 submission, re-scoring, approval, immutable v1, exact rubric references, audit score history, and final Task status. The test suite also exercises incomplete-review rejection, completed-review score immutability, resource access boundaries, and parallel submission/rubric-version/review/decision requests.
 
-`dev-client/` is an optional local developer testing utility. It is not part of the backend runtime and is not required to run or evaluate the API. The root TypeScript, ESLint, Jest, Docker, build, and runtime configurations do not depend on it.
-
 ## Scope and scaling limits
 
-The sample deliberately excludes a production frontend/client portal, file storage, bulk import/export, LLM integrations and model gateways, queues, Redis, microservices, Kubernetes, OAuth/SSO, and broad observability infrastructure. `dev-client/` remains an isolated development-only API exerciser, not a deployed product client.
+The sample deliberately excludes a production frontend/client portal, file storage, bulk import/export, LLM integrations and model gateways, queues, Redis, microservices, Kubernetes, OAuth/SSO, and broad observability infrastructure.
 
 The first practical pressure points at scale are AuditLog growth, large project/task list queries, offset pagination, PostgreSQL connection limits, concurrent writes to hot Tasks, and large Submission payloads. Likely next steps are cursor pagination and projections, audit retention or partitioning, object storage for documents, structured logs and metrics, and background processing for long-running model-evaluation work. A queue becomes appropriate only once those asynchronous workloads exist.
